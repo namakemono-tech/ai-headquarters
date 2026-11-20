@@ -1,0 +1,15 @@
+{
+  "name": "ai-headquarters",
+  "description": "AI司令部の配布用の一覧",
+  "owner": {
+    "name": "ナマケモノテック"
+  },
+  "plugins": [
+    {
+      "name": "ai-headquarters",
+      "displayName": "AI司令部",
+      "source": "./",
+      "description": "任務分析、命令書、部隊の編成と検収を、規律つきで進めるための司令部プラグイン"
+    }
+  ]
+}

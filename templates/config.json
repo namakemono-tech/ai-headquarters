@@ -1,0 +1,10 @@
+{
+  "protect": {
+    "add": ["private/**"],
+    "exclude": ["test/fixtures/dummy.pem"]
+  },
+  "inspector": {
+    "testCommands": ["python -m pytest"],
+    "allowedOptions": ["-q"]
+  }
+}

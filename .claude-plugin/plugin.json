@@ -1,0 +1,12 @@
+{
+  "name": "ai-headquarters",
+  "displayName": "AI司令部",
+  "version": "0.1.1",
+  "description": "任務分析、命令書、部隊の編成と検収を、規律つきで進めるための司令部プラグイン",
+  "author": {
+    "name": "ナマケモノテック"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/namakemono-tech/ai-headquarters",
+  "repository": "https://github.com/namakemono-tech/ai-headquarters"
+}

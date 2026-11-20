@@ -1,0 +1,7 @@
+{
+  "name": "ai-headquarters",
+  "private": true,
+  "scripts": {
+    "test": "node scripts/run-tests.js"
+  }
+}

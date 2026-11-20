@@ -1,0 +1,31 @@
+# 自動テストを Mac と Windows、Node.js 22 と 24 で流す(結果を見比べるため、どれかが落ちても、ほかは最後まで流す)
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: 環境
+        run: node --version && git --version
+      - name: 自動テスト
+        run: npm test
