@@ -525,6 +525,57 @@ function hitsClaudeProtected(arg, base, allowRoot) {
 }
 const COPY_CMDS = new Set(['cp', 'copy', 'copy-item', 'cpi', 'xcopy', 'rsync', 'robocopy']);
 
+// ---------------------------------------------------------------- 資源の登録の保護(0.3.0)
+// .claude/skills/、.claude/agents/、.mcp.json。unit は命令書にはっきり書かれたときだけ、ほかのサブエージェントは不可、メインセッションは止めない
+function regKind(relC) {
+  if (relC === '.mcp.json') return 'mcp';
+  if (relC === '.claude/skills' || relC.startsWith('.claude/skills/')) return 'skills';
+  if (relC === '.claude/agents' || relC.startsWith('.claude/agents/')) return 'agents';
+  return null;
+}
+// シェルの語(グロブを含みうる)が、資源の登録を指しているか。グロブは、記号より前の部分で見る
+function hitsRegistry(arg, base) {
+  let a = arg;
+  if (a.startsWith('-')) { const k = a.indexOf(':'); if (k < 0) return false; a = a.slice(k + 1); }
+  if (!a || (WIN && /^\/[a-z?]$/i.test(a))) return false;
+  const info = resolvePath(a, base);
+  if (!info.inside) return false;
+  const r = info.relC.replace(/\/+$/, '');
+  const lit = r.split(/[*?]/)[0];
+  if (lit !== r) return regKind(lit.replace(/\/+$/, '')) !== null || ['.claude/skills', '.claude/agents', '.mcp.json'].some((c) => globPath(compileGlob(r), c.split('/'), false));
+  return regKind(r) !== null;
+}
+// 命令書の項目が、その種類の資源の登録を「はっきり」指しているか(グロブの記号より前の部分で判断する)
+function explicitEntry(p, kind) {
+  const lit = p.split(/[*?]/)[0];
+  if (kind === 'mcp') return p === '.mcp.json';
+  const dir = `.claude/${kind}`;
+  return p === dir || lit.startsWith(`${dir}/`);
+}
+
+// プラグインと MCP の状態を変える claude のコマンド(0.3.0)。照合したときは、その説明を返す
+const PLUGIN_READ = new Set(['list', 'details', 'validate', 'help']);
+const MARKET_READ = new Set(['list', 'help']);
+const MCP_READ = new Set(['list', 'get', 'help']);
+const NEST_OPTS = ['--plugin-dir', '--mcp-config', '--dangerously-skip-permissions'];
+function claudeLabel(name, args) {
+  if (name !== 'claude') return null;
+  const nest = args.find((a) => NEST_OPTS.some((o) => a.toLowerCase() === o || a.toLowerCase().startsWith(`${o}=`)));
+  if (nest) return `claude の入れ子の起動(${nest.split('=')[0]})`;
+  const i = args.findIndex((a) => ['plugin', 'plugins', 'mcp'].includes(a.toLowerCase()));
+  if (i < 0) return null;
+  const group = args[i].toLowerCase();
+  const rest = args.slice(i + 1).filter((a) => !a.startsWith('-'));
+  const sub = (rest[0] || '').toLowerCase();
+  if (!sub) return null;
+  if (group === 'mcp') return MCP_READ.has(sub) ? null : `claude mcp ${sub}`;
+  if (sub === 'marketplace') {
+    const ms = (rest[1] || '').toLowerCase();
+    return !ms || MARKET_READ.has(ms) ? null : `claude plugin marketplace ${ms}`;
+  }
+  return PLUGIN_READ.has(sub) ? null : `claude plugin ${sub}`;
+}
+
 // 丸ごと上書きされるファイル(の候補)を返す
 function overwriteTargets(name, args) {
   const nonOpt = args.filter((a) => !(a.startsWith('-') || (WIN && /^\/[a-z?]$/i.test(a))));
@@ -563,6 +614,8 @@ function handleEff(eff, st, base, ctx, v, seg, depth) {
   }
   const label = destructiveLabel(name, args);
   if (label) v.denyOrAsk(`破壊的なコマンド(${label})です。`);
+  const cl = claudeLabel(name, args);
+  if (cl) v.denyOrAsk(`プラグインや MCP の状態を変えるコマンド(${cl})です。入れたものの Hooks や MCP サーバーは利用者の権限で動き、作戦の途中で統制が変わります。入れるかどうかは指揮官が決めます。`);
   let targets = null;
   if (DELMOVE.has(name)) targets = args;
   else if (name === 'git') {
@@ -655,6 +708,9 @@ function checkCmd(cmd, st, ctx, v, depth) {
       if (ctx.protectedPath(info, readOnly || tk.redir === '<')) {
         v.denyOrAsk(`保護対象のファイル(${tk.t})を含むコマンドです。`);
       }
+      if (ctx.isSub && !readOnly && tk.redir !== '<' && hitsRegistry(tk.t, base)) {
+        v.deny(`サブエージェントは、シェルのコマンドで .claude/skills/、.claude/agents/、.mcp.json(${tk.t})を書き換えられません。unit は、命令書の【変更してよいファイル】にはっきり書かれたときに、Edit か Write で書いてください。`);
+      }
     }
     if (!eff) continue;
     if (eff.inner !== undefined) checkCmd(eff.inner, { ...st }, ctx, v, depth + 1);
@@ -735,6 +791,92 @@ function latestOperation(root) {
 function opNumber(x) {
   const m = /OP-(\d+)/i.exec(String(x == null ? '' : x));
   return m ? parseInt(m[1], 10) : null;
+}
+
+// ---------------------------------------------------------------- 作戦中の見分け方と Skill ツール(0.3.0)
+// メインセッションが作戦記録を書いたときに、そのセッションと作戦番号を記録する
+function markOperation(info, input, root) {
+  const m = /^\.ai-headquarters\/operations\/op-(\d+)\.md$/i.exec(info.relC || '');
+  if (!m || typeof input.session_id !== 'string' || !input.session_id) return;
+  try {
+    // 最初の作戦記録を書くときは、state のフォルダがまだ無い
+    fs.mkdirSync(path.join(root, AHQ, 'state'), { recursive: true });
+    atomicWrite(path.join(root, AHQ, 'state', 'operation-session.json'),
+      { session_id: input.session_id, operation: `OP-${String(parseInt(m[1], 10)).padStart(3, '0')}`, ts: new Date().toISOString() });
+    // 作戦記録ができたので、作戦の始まりの記録を消し、作戦記録による見分け方に引き継ぐ
+    clearPending(input.session_id);
+  } catch { /* 記録できなくても、書き込みそのものは妨げない */ }
+}
+// 最新の作戦記録の「## 結果」の次の行(空行を除く)が「未完了」で始まるか。欄が無い・読み取れないときは未完了とみなす
+function resultPending(root, num) {
+  try {
+    const dir = path.join(root, AHQ, 'operations');
+    const f = fs.readdirSync(dir).find((n) => { const x = /^OP-(\d+)\.md$/i.exec(n); return x && parseInt(x[1], 10) === num; });
+    if (!f) return true;
+    const lines = fs.readFileSync(path.join(dir, f), 'utf8').replace(/^﻿/, '').split(/\r?\n/);
+    const i = lines.findIndex((l) => /^##\s*結果\s*$/.test(l.trim()));
+    if (i < 0) return true;
+    for (let k = i + 1; k < lines.length; k++) {
+      const t = lines[k].trim();
+      if (!t) continue;
+      if (/^#/.test(t)) return true;
+      return t.startsWith('未完了');
+    }
+    return true;
+  } catch { return true; }
+}
+// 作戦の始まり(mission・mission-analysis を読み込んだとき、/ai-headquarters:mission で始めたとき)の記録。
+// 小規模の作業でプロジェクトに .ai-headquarters/ を作らないため、OS の一時フォルダに置く。
+// 終わり方(2026-11-22 指揮官の決定):
+// - /ai-headquarters:mission で始め、mission-analysis をまだ読み込んでいないときは、指揮官の次の発言で終わる(approval.js)
+// - mission-analysis を読み込んだあと(analysis: true)は、任務分析の途中の質問に答えても終わらず、次のどれかで終わる
+//   作戦記録ができたとき(markOperation。作戦記録による見分け方に引き継ぐ)
+//   メインセッションがプロジェクトの .ai-headquarters/ の外のファイルを書き換え始めたとき(小規模と判断して実装に入った)
+//   指揮官の発言が3回目になったとき(approval.js。小規模で書き換えが無いときも、確認が出続けないように)
+function pendingPath(sid) {
+  return path.join(require('os').tmpdir(), 'ai-headquarters', `pending-${String(sid).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+}
+function writePending(sid, analysis) {
+  if (typeof sid !== 'string' || !sid) return;
+  try {
+    const p = pendingPath(sid);
+    const dir = path.dirname(p);
+    fs.mkdirSync(dir, { recursive: true });
+    const limit = Date.now() - 24 * 3600 * 1000;
+    for (const n of fs.readdirSync(dir)) {
+      try { const q = path.join(dir, n); if (fs.statSync(q).mtimeMs < limit) fs.unlinkSync(q); } catch { /* 無視 */ }
+    }
+    // mission の読み込みでは、mission-analysis で始まっていた記録を弱めない
+    const prev = readJsonSafe(p);
+    const a = analysis || !!(prev && prev.analysis === true);
+    atomicWrite(p, { session_id: sid, ts: new Date().toISOString(), analysis: a, prompts: 0 });
+  } catch { /* 記録できなくても、読み込みそのものは妨げない */ }
+}
+function clearPending(sid) {
+  if (typeof sid !== 'string' || !sid) return;
+  try { fs.unlinkSync(pendingPath(sid)); } catch { /* 無ければ何もしない */ }
+}
+function hasPending(sid) {
+  return typeof sid === 'string' && sid !== '' && fs.existsSync(pendingPath(sid));
+}
+function inOperation(input, root) {
+  if (hasPending(input.session_id)) return true;
+  const rec = readJsonSafe(path.join(root, AHQ, 'state', 'operation-session.json'));
+  if (!rec || typeof rec.session_id !== 'string' || rec.session_id !== input.session_id) return false;
+  const latest = latestOperation(root);
+  if (latest === null || opNumber(rec.operation) !== latest) return false;
+  return resultPending(root, latest);
+}
+const AHQ_SKILL_RE = /^(ai-headquarters:)?(mission|mission-analysis|mission-order)$/i;
+function evalSkill(input, ctx, v) {
+  const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  const name = typeof ti.skill === 'string' ? ti.skill.trim() : '';
+  if (AHQ_SKILL_RE.test(name)) {
+    if (!ctx.isSub && /^(ai-headquarters:)?(mission|mission-analysis)$/i.test(name)) writePending(input.session_id, /mission-analysis$/i.test(name));
+    return;
+  }
+  if (!inOperation(input, ctx.base.rootNative)) return;
+  v.denyOrAsk(`作戦中に、AI司令部のスキル(mission、mission-analysis、mission-order)以外のスキル(${name || '名前不明'})を Skill ツールで読み込もうとしています。資源の手配の決まりでは、候補のスキルは Skill ツールで読み込まず、指揮官が使うと決めたものだけを Read で読んで、要点を命令書に写します。Skill ツールでの読み込みは、埋め込みのコマンドの実行、context: fork による別のサブエージェントの起動、hooks の登録が起こりうるためです。`);
 }
 
 function tryCreateExclusive(p, obj) {
@@ -893,7 +1035,8 @@ function unitGate(input, ctx, v) {
   atomicWrite(path.join(stateDir, 'unit-scope.json'), rec);
 }
 
-function unitScopeAllows(info, root) {
+// regKind を渡したときは、その種類の資源の登録をはっきり指す項目だけで照合する(0.3.0)
+function unitScopeAllows(info, root, regKindOnly = null) {
   const scope = readJsonSafe(path.join(root, AHQ, 'state', 'unit-scope.json'));
   if (!scope || scope.valid !== true || !Array.isArray(scope.entries) || !scope.entries.length) return false;
   if (!info.inside || info.relC === '') return false;
@@ -903,6 +1046,7 @@ function unitScopeAllows(info, root) {
     const dir = p.endsWith('/');
     p = lc(p.replace(/^\//, '').replace(/\/+$/, ''));
     if (!p) continue;
+    if (regKindOnly && !explicitEntry(p, regKindOnly)) continue;
     // フォルダ(末尾 /)と、グロブを含まない項目は、その中のすべてにも当てる
     if (globPath(compileGlob(p), info.segs, dir || !/[*?]/.test(p))) return true;
   }
@@ -933,6 +1077,10 @@ function evalEdit(input, ctx, v) {
   }
   const info = resolvePath(p, ctx.base);
   const kind = ahqKind(info);
+  if (kind === 'ops' && !ctx.isSub) markOperation(info, input, ctx.base.rootNative);
+  // メインセッションがプロジェクトの .ai-headquarters/ の外を書き換え始めたら、小規模として実装に入ったとみなし、作戦の始まりを終える
+  // (中規模以上では、計画の決心までは .ai-headquarters/ の外を変更しないため)
+  if (!kind && !ctx.isSub && info.inside) clearPending(input.session_id);
   if (kind === 'config' || kind === 'state') {
     v.deny('設定ファイル(.ai-headquarters/config.json)と状態ファイル(.ai-headquarters/state/)への書き込みは、メインセッションを含めて止めています。指揮官が自分で編集してください。');
   } else if (kind && ctx.isSub) {
@@ -942,6 +1090,15 @@ function evalEdit(input, ctx, v) {
   }
   if (ctx.protectedPath(info)) {
     v.denyOrAsk(`保護対象のファイル(${p})への書き込みです。`);
+  }
+  const reg = info.inside ? regKind(info.relC) : null;
+  if (reg && ctx.isSub) {
+    if (role !== 'unit') {
+      v.deny(`サブエージェントは .claude/skills/、.claude/agents/、.mcp.json(${p})を書き換えられません。`);
+    } else if (!unitScopeAllows(info, ctx.base.rootNative, reg)) {
+      v.deny(`${p} は、命令書の【変更してよいファイル】にはっきり書かれていないため、書き換えられません。.claude/skills/、.claude/agents/、.mcp.json は、\`.claude/skills/**\` や \`.mcp.json\` のように、そのパスを書いたときだけ書けます(\`**\` や \`.claude/**\` では書けません)。`);
+    }
+    return;
   }
   if (role === 'unit' && !unitScopeAllows(info, ctx.base.rootNative)) {
     const rec = readJsonSafe(path.join(ctx.base.rootNative, AHQ, 'state', 'unit-scope.json'));
@@ -987,6 +1144,7 @@ function handlePreToolUse(input) {
   if (EDIT_TOOLS.has(tool)) evalEdit(input, ctx, v);
   else if (SHELL_TOOLS.has(tool)) evalShell(input, ctx, v);
   else if (AGENT_TOOLS.has(tool)) evalAgent(input, ctx, v);
+  else if (tool === 'Skill') evalSkill(input, ctx, v);
   const r = v.result();
   if (!r) return;
   const out = { hookEventName: 'PreToolUse', permissionDecision: r.d };

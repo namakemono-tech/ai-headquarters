@@ -51,8 +51,8 @@ describe('7つの型が requirements.md と同じ見出し・同じ順(0.2.0)', 
       assert.deepEqual(headings(skillBlocks[i]), headings(reqBlocks[i]));
     });
   });
-  test('見出し数(命令書8・完了条件1・報告7・計画書6・状況の特質5・行動方針案3・行動方針の分析2)', () => {
-    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 7, 6, 5, 3, 2]);
+  test('見出し数(命令書8・完了条件1・報告7・計画書7(0.3.0 で【使う資源】)・状況の特質5・行動方針案3・行動方針の分析2)', () => {
+    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 7, 7, 5, 3, 2]);
   });
   test('報告の【目標の達成】は【実施内容】と【未解決・懸念】の間', () => {
     const h = headings(skillBlocks[2]);

@@ -46,9 +46,43 @@ function isApproval(prompt) {
   return s === '承認';
 }
 
+// 作戦の始まりの記録(0.3.0)。guard.js と同じ場所(OS の一時フォルダの ai-headquarters)。
+// /ai-headquarters:mission か /mission で始まる発言なら記録する(mission-analysis の読み込み前の印。数え直しにもなる)。
+// それ以外の発言では、mission-analysis の読み込み前なら記録を消す(作戦の始まりを終える)。
+// mission-analysis の読み込み後(analysis: true)は、任務分析の途中の質問への答えで終わらないよう、発言を数え、3回目で消す
+const PENDING_PROMPT_LIMIT = 3;
+function pendingPath(sid) {
+  return path.join(require('node:os').tmpdir(), 'ai-headquarters', `pending-${String(sid).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+}
+function updatePending(input) {
+  const sid = input.session_id;
+  if (typeof sid !== 'string' || !sid || typeof input.prompt !== 'string') return;
+  const p = pendingPath(sid);
+  if (/^[\s　﻿]*\/(ai-headquarters:)?mission(?:\s|$)/.test(input.prompt)) {
+    const dir = path.dirname(p);
+    fs.mkdirSync(dir, { recursive: true });
+    const limit = Date.now() - 24 * 3600 * 1000;
+    for (const n of fs.readdirSync(dir)) {
+      try { const q = path.join(dir, n); if (fs.statSync(q).mtimeMs < limit) fs.unlinkSync(q); } catch { /* 無視 */ }
+    }
+    atomicWrite(p, { session_id: sid, ts: new Date().toISOString(), analysis: false, prompts: 0 });
+  } else if (!/^[\s　﻿]*<task-notification>/.test(input.prompt)) {
+    // サブエージェントの報告の知らせ(<task-notification> で始まるもの)は、指揮官の発言として数えない
+    const rec = readJsonSafe(p);
+    if (rec === null && !fs.existsSync(p)) return;
+    const n = rec && Number.isInteger(rec.prompts) && rec.prompts >= 0 ? rec.prompts + 1 : 1;
+    if (rec && rec.analysis === true && n < PENDING_PROMPT_LIMIT) {
+      atomicWrite(p, { ...rec, prompts: n });
+    } else {
+      try { fs.unlinkSync(p); } catch { /* 無ければ何もしない */ }
+    }
+  }
+}
+
 function main() {
   const input = JSON.parse(fs.readFileSync(0, 'utf8').replace(/^﻿/, ''));
   if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+  try { updatePending(input); } catch { /* 指揮官の発言を止めない */ }
   // 入力に出どころを見分ける欄は確認できていない。完全一致だけで判定する
   if (!isApproval(input.prompt)) return;
   if (typeof input.session_id !== 'string' || input.session_id === '') return;
