@@ -181,7 +181,7 @@ describe('点検の指摘 3: cd の追跡', () => {
 describe('点検の指摘 4・9: 命令書の範囲の読み方と、unit の関門', () => {
   const ok = () => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001' },
+    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
   });
   const call = (root, prompt, agent = null, type = 'ai-headquarters:unit') =>
     pre(root, { agent, tool: 'Agent', input: { subagent_type: type, prompt, description: 'd' } });
@@ -313,7 +313,7 @@ describe('点検の指摘 10・11: 照合の計算量と rm の短いオプシ�
   });
   test('範囲の照合でも同様', () => {
     const root = fix({
-      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001' },
+      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
     });
     const prompt = '【変更してよいファイル】\n- ' + '**/'.repeat(12) + 'x.js';
     assert.equal(dec(pre(root, { tool: 'Agent', input: { subagent_type: 'unit', prompt } })), null);

@@ -1,8 +1,8 @@
 {
   "name": "ai-headquarters",
   "displayName": "AI司令部",
-  "version": "0.1.1",
-  "description": "任務分析、命令書、部隊の編成と検収を、規律つきで進めるための司令部プラグイン",
+  "version": "0.2.0",
+  "description": "任務分析、目標と計画の決心、行動方針の比較、命令書、監察を、規律つきで進めるための司令部プラグイン",
   "author": {
     "name": "ナマケモノテック"
   },

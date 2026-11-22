@@ -25,7 +25,11 @@ function atomicWrite(p, obj) {
 }
 
 function missingHeadings(text, role) {
-  const need = role === 'unit' ? [...BASE_HEADINGS.slice(0, 3), '実施内容', ...BASE_HEADINGS.slice(3)] : BASE_HEADINGS;
+  // 【実施内容】は unit だけ。【目標の達成】(0.2.0)は unit と inspector だけ。並びは報告の型の順
+  const need = [...BASE_HEADINGS.slice(0, 3)];
+  if (role === 'unit') need.push('実施内容');
+  if (role === 'unit' || role === 'inspector') need.push('目標の達成');
+  need.push(...BASE_HEADINGS.slice(3));
   // 行頭の空白と、Markdown の飾り(# > - * **)は許す。行の途中の見出しは数えない
   return need.filter((h) => !new RegExp(HEAD_PREFIX + '【' + h + '】', 'm').test(text)).map((h) => `【${h}】`);
 }

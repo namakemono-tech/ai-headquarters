@@ -467,7 +467,7 @@ describe('承認の関門・予約・範囲', () => {
   const approved = (extra = {}) => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
     '.ai-headquarters/operations/OP-002.md': 'b',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-002' },
+    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-002', plan: '2026-11-22T00:00:00Z' },
     ...extra,
   });
 
@@ -492,7 +492,7 @@ describe('承認の関門・予約・範囲', () => {
   test('古い作戦番号の承認は deny', () => {
     const root = fix({
       '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/operations/OP-002.md': 'b',
-      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001' },
+      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
     });
     const r = agentCall(root);
     assert.equal(dec(r), 'deny');
@@ -501,7 +501,7 @@ describe('承認の関門・予約・範囲', () => {
   test('作戦番号は数値で比べる(OP-9 と OP-10)', () => {
     const root = fix({
       '.ai-headquarters/operations/OP-9.md': 'a', '.ai-headquarters/operations/OP-10.md': 'b',
-      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-10' },
+      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-10', plan: '2026-11-22T00:00:00Z' },
     });
     assert.equal(dec(agentCall(root)), null);
   });
@@ -676,17 +676,18 @@ describe('承認の関門・予約・範囲', () => {
       start(root, '【変更してよいファイル】\n- .env\n- src/a.js');
       assert.equal(dec(ed(root, 'unit', '.env', 'Write')), 'deny');
     });
-    test('【変更してよいファイル】が無ければ valid:false で unit の書き込みは全部 deny', () => {
+    test('【変更してよいファイル】が無ければ、起動を止め、unit の書き込みも全部 deny(2026-11-22)', () => {
       const root = approved();
-      start(root, '【任務番号】OP-1\n【目的】x');
-      assert.deepEqual(readJson(root, '.ai-headquarters/state/unit-scope.json'), { valid: false });
+      assert.equal(dec(agentCall(root, 'S1', '【任務番号】OP-1\n【目的】x')), 'deny');
+      assert.equal(fs.existsSync(path.join(root, '.ai-headquarters/state/unit-scope.json')), false);
+      assert.equal(fs.existsSync(path.join(root, '.ai-headquarters/state/unit-lock.json')), false);
       assert.equal(dec(ed(root, 'unit', 'src/a.js', 'Write')), 'deny');
       assert.equal(dec(ed(root, 'unit', 'a.txt', 'Edit')), 'deny');
     });
-    test('セクションが空でも valid:false', () => {
+    test('セクションが空でも、起動を止める', () => {
       const root = approved();
-      start(root, '【変更してよいファイル】\n\n   \n【完了条件】\n- src/a.js');
-      assert.deepEqual(readJson(root, '.ai-headquarters/state/unit-scope.json'), { valid: false });
+      assert.equal(dec(agentCall(root, 'S1', '【変更してよいファイル】\n\n   \n【完了条件】\n- src/a.js')), 'deny');
+      assert.equal(fs.existsSync(path.join(root, '.ai-headquarters/state/unit-scope.json')), false);
       assert.equal(dec(ed(root, 'unit', 'src/a.js', 'Write')), 'deny');
     });
     test('範囲の記録が無ければ deny', () => {

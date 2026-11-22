@@ -90,3 +90,15 @@ describe('hooks.json の登録', () => {
     assert.deepEqual(h.SubagentStart[0].hooks[0].args, ['${CLAUDE_PLUGIN_ROOT}/hooks/guard.js', 'subagent-start']);
   });
 });
+
+describe('命令書を書く前に型を読む案内(2026-11-22)', () => {
+  test('プラグイン版: 命令書を書く前に ai-headquarters:mission-order を読み込む', () => {
+    const t = ctx(run(good, true)).additionalContext;
+    assert.ok(t.includes('命令書を書く前に、ai-headquarters:mission-order スキルを読み込んでください'), t);
+    assert.ok(t.split('\n').length <= 8);
+  });
+  test('ZIP 版: mission-order(接頭辞なし)', () => {
+    const t = ctx(run(good, false)).additionalContext;
+    assert.ok(t.includes('命令書を書く前に、mission-order スキルを読み込んでください'), t);
+  });
+});

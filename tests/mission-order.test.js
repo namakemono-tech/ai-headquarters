@@ -38,22 +38,48 @@ describe('SKILL.md の形式', () => {
   });
 });
 
-describe('3つの型が requirements.md と同じ見出し・同じ順', { skip: SKIP_REQ }, () => {
+describe('7つの型が requirements.md と同じ見出し・同じ順(0.2.0)', { skip: SKIP_REQ }, () => {
   const reqBlocks = HAS_REQ ? codeBlocks(section(REQ, '## 命令書と報告の型').split('## 作戦の流れ')[0]) : [];
   const skillBlocks = codeBlocks(SKILL.split('## 記入例')[0]);
-  const names = ['命令書', '報告', '計画書'];
-  test('型のコードブロックは3つ', () => {
-    assert.equal(reqBlocks.length, 3);
-    assert.equal(skillBlocks.length, 3);
+  const names = ['命令書', '完了条件の分け方', '報告', '計画書', '状況の特質', '行動方針案', '行動方針の分析'];
+  test('型のコードブロックは7つ', () => {
+    assert.equal(reqBlocks.length, 7);
+    assert.equal(skillBlocks.length, 7);
   });
   names.forEach((n, i) => {
     test(`${n}`, () => {
       assert.deepEqual(headings(skillBlocks[i]), headings(reqBlocks[i]));
-      assert.ok(headings(skillBlocks[i]).length >= 6);
     });
   });
-  test('見出し数(命令書8・報告6・計画書6)', () => {
-    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 6, 6]);
+  test('見出し数(命令書8・完了条件1・報告7・計画書6・状況の特質5・行動方針案3・行動方針の分析2)', () => {
+    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 7, 6, 5, 3, 2]);
+  });
+  test('報告の【目標の達成】は【実施内容】と【未解決・懸念】の間', () => {
+    const h = headings(skillBlocks[2]);
+    assert.equal(h.indexOf('目標の達成'), h.indexOf('実施内容') + 1);
+    assert.equal(h.indexOf('未解決・懸念'), h.indexOf('目標の達成') + 1);
+  });
+  test('完了条件の分け方:必成、時期的順位、望成(優先と損耗限度)の書き方があり、本文の行は【】で始まらない', () => {
+    const b = skillBlocks[1];
+    assert.match(b, /^必成: /m);
+    assert.match(b, /^望成1\(優先1、損耗限度: 試行\d+回、\d+分\): /m);
+    assert.equal(b.split('\n').filter((l) => l.startsWith('【')).length, 1);
+    assert.match(SKILL, /達成する順に「必成1:」「必成2:」/);
+    assert.match(SKILL, /必成を終えてから望成に着手し、損耗限度に達したら繰り返さずに止め/);
+  });
+  test('状況の特質:敵の可能行動は5つまで、最も起こりやすいものと最も痛いもの', () => {
+    assert.match(skillBlocks[4], /5つまで/);
+    assert.match(skillBlocks[4], /最も起こりやすいもの/);
+    assert.match(skillBlocks[4], /起きたら最も痛いもの/);
+  });
+  test('行動方針案:2〜3案、評価の材料になる事実、1案だけの理由', () => {
+    assert.match(skillBlocks[5], /2〜3案/);
+    assert.match(skillBlocks[5], /評価の材料になる事実/);
+    assert.match(skillBlocks[5], /^【1案だけの理由】/m);
+  });
+  test('行動方針の分析:表の3列と致命的な弱点', () => {
+    assert.match(skillBlocks[6], /「我の行動」「敵の可能行動が起こす問題」「こちらの対処」/);
+    assert.match(skillBlocks[6], /^【致命的な弱点】/m);
   });
 });
 
@@ -70,7 +96,7 @@ describe('記入例(unit 向け命令書)が guard.js を通る', () => {
       fs.writeFileSync(path.join(root, rel), typeof v === 'string' ? v : JSON.stringify(v));
     };
     w('.ai-headquarters/operations/OP-003.md', 'x');
-    w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-003' });
+    w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-003', plan: '2026-11-22T00:00:00Z' });
     return root;
   };
   const run = (root, input, extra = {}) => {
@@ -91,11 +117,16 @@ describe('記入例(unit 向け命令書)が guard.js を通る', () => {
   test('記入例の命令書は8つの見出しが、型と同じ順番でそろっている', () => {
     assert.deepEqual(headings(example), headings(skillBlocks[0]));
   });
-  test('型のブロックをそのまま写した命令書は、範囲が読み取れず、unit の書き込みは全部止まる', () => {
+  test('記入例の命令書の【完了条件】は、必成と望成に分けてある(0.2.0)', () => {
+    const c = example.split(/^【完了条件】/m)[1].split(/^【/m)[0];
+    assert.match(c, /^必成: /m);
+    assert.match(c, /^望成1\(優先1、損耗限度: /m);
+  });
+  test('型のブロックをそのまま写した命令書は、範囲が読み取れず、unit の起動そのものが止まる(2026-11-22)', () => {
     const root = makeRoot();
-    assert.equal(run(root, { tool_name: 'Agent', tool_input: { subagent_type: 'ai-headquarters:unit', prompt: skillBlocks[0], description: 'd' } }), null);
-    const scope = JSON.parse(fs.readFileSync(path.join(root, '.ai-headquarters/state/unit-scope.json'), 'utf8'));
-    assert.deepEqual(scope, { valid: false });
+    assert.equal(run(root, { tool_name: 'Agent', tool_input: { subagent_type: 'ai-headquarters:unit', prompt: skillBlocks[0], description: 'd' } }), 'deny');
+    assert.equal(fs.existsSync(path.join(root, '.ai-headquarters/state/unit-lock.json')), false, '予約が残っていない');
+    assert.equal(fs.existsSync(path.join(root, '.ai-headquarters/state/unit-scope.json')), false, '範囲を記録していない');
     for (const rel of ['src/a.js', 'src/auth/login.js', 'package.json']) {
       assert.equal(run(root, { tool_name: 'Write', tool_input: { file_path: path.join(root, rel) } }, { agent_id: 'agent-1', agent_type: 'unit' }), 'deny', rel);
     }
@@ -122,7 +153,7 @@ describe('記入例の報告', { skip: SKIP_REQ }, () => {
   // 必須の見出しは、requirements.md の「必須の見出しは…の5つ」の行から取り出す
   const reqLine = HAS_REQ ? REQ.split('\n').find((l) => l.includes('必須の見出しは')) : '';
   const required = [...reqLine.slice(0, reqLine.indexOf('の5つ')).matchAll(/【([^】]+)】/g)].map((m) => m[1]);
-  const planHeads = headings(codeBlocks(SKILL.split('## 記入例')[0])[2]);
+  const coaHeads = headings(codeBlocks(SKILL.split('## 記入例')[0])[5]);
   test('必須の見出しは、requirements.md から5つ取り出せる', () => {
     assert.equal(required.length, 5);
     assert.deepEqual(required, ['任務番号', '結論', '根拠', '未解決・懸念', '推測']);
@@ -131,27 +162,80 @@ describe('記入例の報告', { skip: SKIP_REQ }, () => {
     assert.equal(codeBlocks(section(SKILL, '## 記入例')).length, 3);
     assert.ok(unitReport && plansReport);
   });
-  test('unit の報告: 必須の5つが行の先頭にあり、【実施内容】もある', () => {
-    for (const h of [...required, '実施内容']) assert.match(unitReport, new RegExp(`^【${h}】`, 'm'), h);
+  test('unit の報告: 必須の5つが行の先頭にあり、【実施内容】と【目標の達成】もある', () => {
+    for (const h of [...required, '実施内容', '目標の達成']) assert.match(unitReport, new RegExp(`^【${h}】`, 'm'), h);
+    const g = unitReport.split(/^【目標の達成】/m)[1].split(/^【/m)[0];
+    assert.match(g, /必成: 達成/);
+    assert.match(g, /望成1: /);
   });
   test('plans の報告: 必須の5つが行の先頭にある(【実施内容】は不要)', () => {
     for (const h of required) assert.match(plansReport, new RegExp(`^【${h}】`, 'm'), h);
     assert.doesNotMatch(plansReport, /^【実施内容】/m);
   });
-  test('plans の報告: 計画書の6つの見出しが行の先頭にあり、【結論】の1行目は要約', () => {
-    for (const h of planHeads) assert.match(plansReport, new RegExp(`^【${h}】`, 'm'), h);
+  test('plans の報告: 行動方針案の3つの見出しが行の先頭にあり、【結論】の1行目は要約(0.2.0)', () => {
+    for (const h of coaHeads) assert.match(plansReport, new RegExp(`^【${h}】`, 'm'), h);
     assert.match(plansReport, /^【結論】\S+/m);
+    assert.match(plansReport, /^案1/m);
+    assert.match(plansReport, /^案2/m);
   });
-  test('plans の報告: 計画書の見出しは【結論】と【根拠】の間にある', () => {
+  test('plans の報告: 行動方針案の見出しは【結論】と【根拠】の間にある', () => {
     const order = headings(plansReport);
-    assert.deepEqual(order.slice(0, 2 + planHeads.length + 1), ['任務番号', '結論', ...planHeads, '根拠']);
+    assert.deepEqual(order.slice(0, 2 + coaHeads.length + 1), ['任務番号', '結論', ...coaHeads, '根拠']);
   });
   test('記入例の任務番号は、plans が OP-003-1、unit の命令書と報告が OP-003-2', () => {
     const ex = codeBlocks(section(SKILL, '## 記入例'));
     assert.deepEqual(ex.map((b) => /^【任務番号】(\S+)/m.exec(b)[1]), ['OP-003-2', 'OP-003-2', 'OP-003-1']);
   });
-  test('plans の報告: 【手順】の中で【】を使わない', () => {
-    const body = plansReport.split(/^【手順】/m)[1].split(/^【リスク】/m)[0];
+  test('plans の報告: 【行動方針】の中で【】を使わない', () => {
+    const body = plansReport.split(/^【行動方針】/m)[1].split(/^【1案だけの理由】/m)[0];
     assert.doesNotMatch(body, /【/);
+  });
+});
+
+describe('報告の決まり:指揮官の指定でないものを指定として書かない(2026-11-21)', () => {
+  test('報告の決まりにある', () => {
+    const rules = section(SKILL, '### 報告の決まり').split(/^## /m)[0];
+    assert.match(rules, /指揮官の指定でないものを、指定として書きません/);
+  });
+  test('要件の報告の型の決まりにもある', { skip: SKIP_REQ }, () => {
+    const req = section(REQ, '## 命令書と報告の型').split('## 作戦の流れ')[0];
+    assert.match(req, /指揮官の指定でないものを、指定として書かない/);
+  });
+});
+
+describe('権限や Hooks で止められた望成目標(2026-11-21)', () => {
+  const duty = section(SKILL, '## 全員の義務').slice('## 全員の義務'.length).split(/^## /m)[0];
+  test('全員の義務: 望成目標の作業なら、試行1回と数え、限度に達したら捨てる', () => {
+    assert.match(duty, /望成目標のための操作が止められたときは、試行1回と数え、損耗限度に達したら「捨てた」と【目標の達成】に書き、何の権限があれば達成できたかを添えます/);
+  });
+  test('分け方の決まりにも、止められた試行を数えることを書く', () => {
+    const rules = section(SKILL, '### 完了条件の分け方').split(/^## /m)[0];
+    assert.match(rules, /権限や Hooks で止められた試行も、1回と数えます/);
+  });
+  test('要件にもある', { skip: SKIP_REQ }, () => {
+    assert.match(REQ, /望成目標のための試行が、権限や Hooks で止められたときも、損耗限度の試行1回と数える/);
+    assert.match(REQ, /最終報告に「何の権限があれば達成できたか」を書く/);
+    assert.match(REQ, /報告の画面にも「指揮官の指定」/);
+  });
+});
+
+describe('無効な命令書の下での試行(2026-11-22)', () => {
+  test('完了条件の分け方: 命令書の書き誤りで unit の起動が止められたときは、試行に数えない(起動の時点で止めるため、無効な命令書の下での試行は無い)', () => {
+    const rules = section(SKILL, '### 完了条件の分け方').split(/^## /m)[0];
+    assert.match(rules, /命令書の書き誤りで unit の起動が止められたときは、試行に数えません/);
+    assert.doesNotMatch(rules, /読み取れなかった命令書の下での試行/);
+  });
+  test('要件にもある', { skip: SKIP_REQ }, () => {
+    assert.match(REQ, /命令書の書き誤りで unit の起動が止められたときは、試行に数えない/);
+    assert.doesNotMatch(REQ, /無効な命令書\)の下で行った試行/);
+    assert.match(REQ, /文末も含めて一字も変えずに写す/);
+    assert.match(REQ, /サブエージェントへの命令書を書く前に、Skill ツールで mission-order を読み込む/);
+  });
+});
+
+describe('【変更してよいファイル】が読み取れないと、unit の起動が止まる(2026-11-22)', () => {
+  test('書き方の決まりに、起動を止めることを書く', () => {
+    assert.match(SKILL, /欄が無い、または読み取れないと、Hooks が unit の起動を止めます/);
+    assert.doesNotMatch(SKILL, /Hooks が unit のすべての書き込みを止めます/);
   });
 });

@@ -34,8 +34,8 @@ const run = (root, input) => runRaw(RC, JSON.stringify({ cwd: root, session_id: 
 const GOOD = {
   intel: '【任務番号】OP-001-1\n【結論】x\n【根拠】y\n【未解決・懸念】なし\n【推測】なし',
   plans: '【任務番号】OP-001-1\n【結論】x\n【根拠】y\n【未解決・懸念】なし\n【推測】なし',
-  inspector: '【任務番号】OP-001-3\n【結論】x\n【根拠】y\n【未解決・懸念】なし\n【推測】なし',
-  unit: '【任務番号】OP-001-2\n【結論】x\n【根拠】y\n【実施内容】a.js を変更\n【未解決・懸念】なし\n【推測】なし',
+  inspector: '【任務番号】OP-001-3\n【結論】x\n【根拠】y\n【目標の達成】なし\n【未解決・懸念】なし\n【推測】なし',
+  unit: '【任務番号】OP-001-2\n【結論】x\n【根拠】y\n【実施内容】a.js を変更\n【目標の達成】なし\n【未解決・懸念】なし\n【推測】なし',
 };
 const BAD = '【任務番号】OP-009-1\n【結論】x\n【根拠】y\n【推測】なし'; // 【未解決・懸念】が欠け(unit では【実施内容】も)
 
@@ -134,6 +134,22 @@ describe('見出しの判定', () => {
     // 他の役は【実施内容】が無くても通る
     for (const role of ['intel', 'plans', 'inspector']) silent(stop(fix(), role, GOOD[role]));
   });
+  test('unit と inspector だけ【目標の達成】が必須(0.2.0)', () => {
+    for (const role of ['unit', 'inspector']) {
+      const r = stop(fix(), role, GOOD[role].replace(/【目標の達成】.*\n/, ''));
+      assert.ok(isBlock(r), role);
+      assert.match(json(r).reason, /【目標の達成】/);
+      const h = handback(fix(), role, GOOD[role].replace(/【目標の達成】.*\n/, ''));
+      assert.ok(isDeny(h), role);
+      assert.match(json(h).hookSpecificOutput.permissionDecisionReason, /【目標の達成】/);
+    }
+    // intel と plans は【目標の達成】が無くても通る
+    for (const role of ['intel', 'plans']) silent(stop(fix(), role, GOOD[role]));
+  });
+  test('【目標の達成】の中身(必成と望成の行)は問わない', () => {
+    const t = GOOD.unit.replace('【目標の達成】なし', '【目標の達成】\n必成: 達成\n望成1: 捨てた(損耗限度の試行1回に達したため)');
+    silent(stop(fix(), 'unit', t));
+  });
   test('計画書の見出しが入った plans の報告(記入例)が通る', () => {
     const plan = [
       '【任務番号】OP-003-1', '【結論】ログイン画面の入力チェックは、共通関数に寄せる案を勧めます。以下が計画書です。',
@@ -149,7 +165,7 @@ describe('見出しの判定', () => {
     silent(stop(fix(), 'intel', t));
   });
   test('行頭の空白(全角を含む)は許す', () => {
-    const t = '  【任務番号】a\n\t【結論】b\n　【根拠】c\n【未解決・懸念】d\n   【推測】e';
+    const t = '  【任務番号】a\n\t【結論】b\n　【根拠】c\n　 【目標の達成】なし\n【未解決・懸念】d\n   【推測】e';
     silent(stop(fix(), 'inspector', t));
   });
   test('見出しが行の途中にしか無ければ欠け', () => {
@@ -160,7 +176,7 @@ describe('見出しの判定', () => {
   });
   test('欠けている見出しがすべて理由に入る', () => {
     const r = stop(fix(), 'unit', '【結論】x');
-    for (const h of ['任務番号', '根拠', '実施内容', '未解決・懸念', '推測']) assert.match(json(r).reason, new RegExp(`【${h}】`));
+    for (const h of ['任務番号', '根拠', '実施内容', '目標の達成', '未解決・懸念', '推測']) assert.match(json(r).reason, new RegExp(`【${h}】`));
   });
 });
 
@@ -279,7 +295,7 @@ describe('unit の予約の解除', () => {
     const root = fix();
     fs.mkdirSync(path.join(root, '.ai-headquarters', 'operations'), { recursive: true });
     fs.writeFileSync(path.join(root, '.ai-headquarters', 'operations', 'OP-001.md'), 'x');
-    fs.writeFileSync(path.join(stateDir(root), 'approval.json'), JSON.stringify({ session_id: 'S1', operation: 'OP-001', ts: new Date().toISOString() }));
+    fs.writeFileSync(path.join(stateDir(root), 'approval.json'), JSON.stringify({ session_id: 'S1', operation: 'OP-001', ts: new Date().toISOString(), plan: '2026-11-22T00:00:00Z' }));
     const launch = () => {
       const r = runRaw(GUARD, JSON.stringify({
         session_id: 'S1', cwd: root, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'tu1',

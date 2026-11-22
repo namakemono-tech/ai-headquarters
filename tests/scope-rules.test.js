@@ -22,7 +22,7 @@ function makeRoot() {
     fs.writeFileSync(path.join(root, rel), typeof v === 'string' ? v : JSON.stringify(v));
   };
   w('.ai-headquarters/operations/OP-001.md', 'x');
-  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001' });
+  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' });
   return root;
 }
 function run(root, input, extra = {}) {
@@ -39,6 +39,8 @@ function run(root, input, extra = {}) {
 const launch = (root, prompt) => run(root, { tool_name: 'Agent', tool_input: { subagent_type: 'ai-headquarters:unit', prompt, description: 'd' } });
 const edit = (root, rel) => run(root, { tool_name: 'Edit', tool_input: { file_path: path.join(root, rel) } }, { agent_id: 'agent-1', agent_type: 'unit' });
 const scopeOf = (root) => JSON.parse(fs.readFileSync(path.join(root, '.ai-headquarters/state/unit-scope.json'), 'utf8'));
+const hasScope = (root) => fs.existsSync(path.join(root, '.ai-headquarters/state/unit-scope.json'));
+const hasLock = (root) => fs.existsSync(path.join(root, '.ai-headquarters/state/unit-lock.json'));
 
 describe('規則1: 見出しは行の先頭にあるものだけ。2つ以上なら読み取れない', () => {
   test('見出し行の途中に出てくる見出し名は無視する', () => {
@@ -49,15 +51,15 @@ describe('規則1: 見出しは行の先頭にあるものだけ。2つ以上な
     assert.equal(edit(root, 'src/a.js').decision, null);
     assert.equal(edit(root, 'src/b.js').decision, 'deny');
   });
-  test('行の途中にしか無ければ読み取れない', () => {
+  test('行の途中にしか無ければ読み取れない(起動を止める)', () => {
     const root = makeRoot();
-    launch(root, `【状況】${H}src/a.js を参考にした`);
-    assert.deepEqual(scopeOf(root), { valid: false });
+    assert.equal(launch(root, `【状況】${H}src/a.js を参考にした`).decision, 'deny');
+    assert.equal(hasScope(root), false);
   });
-  test('先頭の見出しが2つ以上なら valid:false で全部 deny', () => {
+  test('先頭の見出しが2つ以上なら、起動を止め、書き込みも全部 deny', () => {
     const root = makeRoot();
-    assert.equal(launch(root, `${H}\nsrc/a.js\n【制約】なし\n  ${H}\nsrc/**`).decision, null);
-    assert.deepEqual(scopeOf(root), { valid: false });
+    assert.equal(launch(root, `${H}\nsrc/a.js\n【制約】なし\n  ${H}\nsrc/**`).decision, 'deny');
+    assert.equal(hasScope(root), false);
     assert.equal(edit(root, 'src/a.js').decision, 'deny');
     assert.equal(edit(root, 'src/b.js').decision, 'deny');
   });
@@ -79,17 +81,17 @@ describe('規則2: 括弧は空白の後ろの行末の注記だけ取り除く'
 });
 
 describe('規則3: 句点「。」を含む項目があれば読み取れない', () => {
-  test('型の見出し行の説明文を写した命令書は valid:false で全部 deny', () => {
+  test('型の見出し行の説明文を写した命令書は、起動を止め、書き込みも全部 deny', () => {
     const root = makeRoot();
     const prompt = `${H}unitのみ。ここにないファイルは触らない。1行に1つ、プロジェクトの最上位からの相対パスで書く\n【制約】なし`;
-    assert.equal(launch(root, prompt).decision, null);
-    assert.deepEqual(scopeOf(root), { valid: false });
+    assert.equal(launch(root, prompt).decision, 'deny');
+    assert.equal(hasScope(root), false);
     assert.equal(edit(root, 'src/a.js').decision, 'deny');
   });
-  test('次の行以降に句点つきの項目があっても読み取れない', () => {
+  test('次の行以降に句点つきの項目があっても読み取れない(起動を止める)', () => {
     const root = makeRoot();
-    launch(root, `${H}\nsrc/a.js\nここを直す。\n`);
-    assert.deepEqual(scopeOf(root), { valid: false });
+    assert.equal(launch(root, `${H}\nsrc/a.js\nここを直す。\n`).decision, 'deny');
+    assert.equal(hasScope(root), false);
   });
 });
 
@@ -136,5 +138,51 @@ describe('括弧の注記(空白なし)と、読み間違える書き方の固�
     launch(root, `${H}\nsrc/memo (copy)\nsrc/note(旧)\n`);
     assert.deepEqual(scopeOf(root).entries, ['src/memo', 'src/note']);
     assert.equal(edit(root, 'src/memo/x.js').decision, null);
+  });
+});
+
+describe('崩れた命令書では unit を起動させない(2026-11-22)', () => {
+  // 0.2.0 の中規模の5回目で、メインセッションが mission-order を読まずに書いた1つ目の命令書
+  const BROKEN = [
+    '【任務】OP-001-2: 金額表示を「円」付きにする。',
+    '【作業場所】C:\\work\\sample',
+    '【変更してよいファイル】src/cart.js、src/receipt.js、README.md のみ。テストと他のファイルは変更しない。',
+    '【内容】',
+    '1. src/cart.js: 表示用の formatYen(n) を追加する。',
+    '【完了条件】',
+    '必成: 上記3か所の金額表示が円付きになっている。',
+  ].join('\n');
+  test('起動の時点で止め、mission-order を読み込んで型の見出しどおりに書き直すよう案内する', () => {
+    const root = makeRoot();
+    const r = launch(root, BROKEN);
+    assert.equal(r.decision, 'deny');
+    assert.ok(r.reason.includes('mission-order'), r.reason);
+    assert.ok(r.reason.includes('型の見出しどおり'), r.reason);
+    assert.ok(r.reason.includes('次の行から'), r.reason);
+  });
+  test('止めたときに、unit の予約と範囲の記録が残らない', () => {
+    const root = makeRoot();
+    assert.equal(launch(root, BROKEN).decision, 'deny');
+    assert.equal(hasLock(root), false, 'unit-lock.json');
+    assert.equal(hasScope(root), false, 'unit-scope.json');
+  });
+  test('止めたあと、書き直した命令書なら起動できる(予約が邪魔をしない)', () => {
+    const root = makeRoot();
+    assert.equal(launch(root, BROKEN).decision, 'deny');
+    assert.equal(launch(root, `【任務番号】OP-001-2\n${H}\nsrc/cart.js\n【完了条件】動く`).decision, null);
+    assert.deepEqual(scopeOf(root).entries, ['src/cart.js']);
+    assert.equal(hasLock(root), true);
+  });
+  test('実行中の unit がいるときに崩れた命令書で起動しても、実行中の範囲の記録を壊さない', () => {
+    const root = makeRoot();
+    assert.equal(launch(root, `${H}\nsrc/a.js`).decision, null);
+    assert.equal(launch(root, BROKEN).decision, 'deny');
+    assert.deepEqual(scopeOf(root).entries, ['src/a.js']);
+    assert.equal(edit(root, 'src/a.js').decision, null);
+  });
+  test('欄が無い命令書も、起動の時点で止める', () => {
+    const root = makeRoot();
+    assert.equal(launch(root, '【任務番号】OP-1\n【任務】x').decision, 'deny');
+    assert.equal(hasLock(root), false);
   });
 });

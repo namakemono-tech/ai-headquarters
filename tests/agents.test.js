@@ -105,7 +105,9 @@ const GUARD = fs.readFileSync(path.join(ROOT, 'hooks', 'guard.js'), 'utf8').repl
 const body = (n) => fs.readFileSync(path.join(ROOT, 'agents', `${n}.md`), 'utf8').replace(/\r\n/g, '\n').replace(/^---\n[\s\S]*?\n---\n/, '');
 const heads = (s) => [...s.matchAll(/【([^】]+)】/g)].map((m) => m[1]);
 const skillBlocks = [...SKILL.slice(SKILL.indexOf('## 命令書'), SKILL.indexOf('## 計画書')).matchAll(/```text\n([\s\S]*?)```/g)].map((m) => [...m[1].matchAll(/^【([^】]+)】/gm)].map((x) => x[1]));
-const [ORDER, REPORT] = skillBlocks;
+// 命令書と報告の型(0.2.0 で間に「完了条件の分け方」の型が入ったため、中身で見分ける)
+const ORDER = skillBlocks.find((b) => b.includes('企図'));
+const REPORT = skillBlocks.find((b) => b.includes('結論'));
 
 describe('本文の命令書と報告の型', () => {
   test('SKILL.md から命令書と報告の型を読み取れている', () => {
@@ -122,7 +124,8 @@ describe('本文の命令書と報告の型', () => {
     test(`${n}: 報告の並びが SKILL.md と同じ(【実施内容】は unit だけ)`, () => {
       const m = /^報告は(.*?)の順/m.exec(body(n));
       assert.ok(m);
-      const expected = REPORT.filter((h) => isUnit || h !== '実施内容');
+      // 【実施内容】は unit だけ。【目標の達成】は unit と inspector に必須で、intel と plans は分けた完了条件を受けたときだけ書く
+      const expected = REPORT.filter((h) => (isUnit || h !== '実施内容') && (isUnit || n === 'inspector' || h !== '目標の達成'));
       assert.deepEqual(heads(m[1]), expected);
       if (isUnit) assert.match(body(n), /【実施内容】には、変更したファイルの一覧を必ず書きます/);
       else assert.match(body(n), /【実施内容】は unit だけの欄なので書きません/);
@@ -162,6 +165,52 @@ describe('本文の命令書と報告の型', () => {
   test('inspector: 反対検討では【状況】の計画書を読み、点検では合否を書く', () => {
     assert.match(body('inspector'), /【状況】に全文が写されています/);
     assert.match(body('inspector'), /【結論】の1行目に、合格か不合格かを書きます/);
+  });
+  // ---------------- 0.2.0
+  for (const n of ['intel', 'plans']) {
+    test(`${n}: 完了条件が必成と望成に分かれた命令書を受けたときだけ【目標の達成】を書く`, () => {
+      assert.match(body(n), /【完了条件】が必成と望成に分かれた命令書を受けたときは、【根拠】の次に【目標の達成】を書きます/);
+    });
+  }
+  test('unit: 必成を終えてから望成に着手し、損耗限度で止め、【目標の達成】に書く', () => {
+    const b = body('unit');
+    assert.match(b, /必成を終えてから望成に着手します/);
+    assert.match(b, /損耗限度(\(試行の回数と時間\))?に達したら、繰り返さずに止め/);
+    assert.match(b, /【目標の達成】には、必成と望成のそれぞれについて/);
+  });
+  test('intel: 状況の特質を5つの観点で整理し、敵の可能行動は5つまで、最も起こりやすいものと最も痛いもの', () => {
+    const b = body('intel');
+    for (const h of ['任務の特質', '地形', '敵の可能行動', '我', '時間']) assert.ok(b.includes(`【${h}】`), h);
+    assert.match(b, /5つまで/);
+    assert.match(b, /最も起こりやすいもの/);
+    assert.match(b, /起きたら最も痛いもの/);
+    assert.match(b, /自分たちでは制御できず、任務の達成に影響する外部の要因/);
+  });
+  test('plans: 行動方針を2〜3案作る。計画書は作らない。1案だけなら理由を書く', () => {
+    const b = body('plans');
+    assert.match(b, /行動方針を2〜3案/);
+    for (const h of ['目標', '行動方針', '1案だけの理由']) assert.ok(b.includes(`【${h}】`), h);
+    assert.match(b, /計画書は作りません/);
+    assert.match(b, /評価の材料になる事実/);
+  });
+  test('plans の description: 行動方針案を返し、大規模で使う', () => {
+    const d = load('plans').description;
+    assert.ok(d.includes('行動方針'));
+    assert.ok(d.includes('大規模'));
+  });
+  test('inspector: 行動方針の分析は、案ごとの表と致命的な弱点。全案を1回で', () => {
+    const b = body('inspector');
+    assert.match(b, /「我の行動」「敵の可能行動が起こす問題」「こちらの対処」/);
+    assert.ok(b.includes('【行動方針の分析】') && b.includes('【致命的な弱点】'));
+    assert.match(b, /すべての案を、1回でまとめて分析します/);
+  });
+  test('inspector: 合否は命令書の必成、制約、既存の動作で決め、望成の未達成は不合格にしない', () => {
+    const b = body('inspector');
+    assert.match(b, /合否は、命令書の【完了条件】の必成、【制約】を守ったこと、既存の動作を壊していないこと/);
+    assert.match(b, /望成の未達成だけでは不合格にせず/);
+  });
+  test('agents: 4体のまま', () => {
+    assert.deepEqual(fs.readdirSync(path.join(ROOT, 'agents')).filter((f) => f.endsWith('.md')).sort(), ['inspector.md', 'intel.md', 'plans.md', 'unit.md']);
   });
   test('SKILL.md: inspector の反対検討では計画書の全文を【】を外して【状況】に写す', () => {
     assert.match(SKILL, /unit の命令書では、計画書を貼らず/);
@@ -207,5 +256,32 @@ describe('hooks.json', () => {
     const h = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
     const parts = h.hooks.PreToolUse[0].matcher.split('|');
     for (const t of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent', 'Task']) assert.ok(parts.includes(t), t);
+  });
+});
+
+describe('unit: 権限や Hooks で止められた望成目標(2026-11-21)', () => {
+  const u = body('unit');
+  test('未解決として報告する場合の例外として、望成目標は試行1回と数えて捨てる', () => {
+    const sec = u.slice(u.indexOf('## 未解決として報告する場合'));
+    assert.match(sec, /望成目標のための操作が止められたときは、別の手段を試さず、試行1回と数えます。損耗限度に達したら「捨てた」と報告し、何の権限があれば達成できたかを書きます/);
+  });
+});
+
+describe('inspector: 監察の合否と確かめ方(2026-11-22)', () => {
+  const i = body('inspector');
+  test('既存の動作を壊していないことの確かめ方は、inspector が決めて【根拠】に書く', () => {
+    assert.match(i, /既存の動作を壊していないことをどう確かめるか\(テストを実行する、コードを読むなど\)は、自分で決め、確かめ方と結果を【根拠】に書きます/);
+    assert.doesNotMatch(i, /既存のテストが通ることなど/);
+  });
+  test('要件にもある', { skip: SKIP_REQ }, () => {
+    assert.match(REQ, /既存の動作を壊していないことをどう確かめるか\(テストを実行する、コードを読むなど\)は、inspector が決めて報告する/);
+    assert.match(REQ, /「テストを実行すること」を望成目標にしたときは、規律と食い違わないので、区分を改めずにそのまま扱う/);
+    assert.doesNotMatch(REQ, /既存のテストが通ることなど/);
+  });
+});
+
+describe('unit: 欄が読み取れない命令書では起動されない(2026-11-22)', () => {
+  test('起動されない場面の決まり(欄が読み取れないまま書き込みを止められる)を残さない', () => {
+    assert.doesNotMatch(body('unit'), /読み取れないとき。この場合、Hooks が書き込みをすべて止めます/);
   });
 });

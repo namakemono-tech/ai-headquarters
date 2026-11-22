@@ -853,6 +853,8 @@ function normalizeScopeEntries(entries, base) {
   return out;
 }
 
+const SCOPE_GUIDE = '【変更してよいファイル】は、見出しの行には何も書かず、次の行から1行に1つ、プロジェクトの最上位からの相対パス(例: src/a.js、src/**)で書いてください。';
+
 function unitGate(input, ctx, v) {
   const root = ctx.base.rootNative;
   const latest = latestOperation(root);
@@ -863,8 +865,23 @@ function unitGate(input, ctx, v) {
   const approval = readJsonSafe(path.join(root, AHQ, 'state', 'approval.json'));
   const ok = approval && typeof approval === 'object' && typeof approval.session_id === 'string' && approval.session_id !== '' && approval.session_id === input.session_id &&
     opNumber(approval.operation) !== null && opNumber(approval.operation) === latest;
+  // unit の起動に要るのは計画の決心(2026-11-22)。目標の決心だけ、または段階の無い古い記録では止める
+  if (ok && !(typeof approval.plan === 'string' && approval.plan !== '')) {
+    const op = `OP-${String(latest).padStart(3, '0')}`;
+    v.deny(typeof approval.goals === 'string' && approval.goals !== ''
+      ? `作戦記録 ${op} には目標の決心の記録しかありません。目標の決心だけでは unit を起動できません。指揮官に計画を示し、「承認」とだけ入力してもらってから(計画の決心)、unit を起動してください。`
+      : `作戦記録 ${op} に対する計画の決心の記録がありません。指揮官に計画を示し、「承認」とだけ入力してもらってから、unit を起動してください。`);
+    return;
+  }
   if (!ok) {
     v.deny(`作戦記録 OP-${String(latest).padStart(3, '0')} に対する指揮官の承認がありません(別のセッションや古い作戦番号の承認は無効です)。指揮官に計画を示し、「承認」とだけ入力してもらってから、unit を起動してください。`);
+    return;
+  }
+  // 範囲は予約より先に読む。読み取れなければ、予約も範囲の記録も残さずに起動を止める(実行中の unit の記録を壊さないため)
+  const ti = input.tool_input || {};
+  const scope = parseScope(ti.prompt);
+  if (!scope.valid) {
+    v.deny(`命令書の【変更してよいファイル】を読み取れないため、unit を起動できません。mission-order スキルを読み込み、型の見出しどおりに命令書を書き直してください。${SCOPE_GUIDE}`);
     return;
   }
   const stateDir = path.join(root, AHQ, 'state');
@@ -872,11 +889,7 @@ function unitGate(input, ctx, v) {
     v.deny('unit は同時に1体までです。実行中の unit(または予約中の起動)が終わってから起動してください。');
     return;
   }
-  const ti = input.tool_input || {};
-  const scope = parseScope(ti.prompt);
-  const rec = scope.valid
-    ? { valid: true, entries: normalizeScopeEntries(scope.entries, ctx.base), session_id: input.session_id, ts: new Date().toISOString() }
-    : { valid: false };
+  const rec = { valid: true, entries: normalizeScopeEntries(scope.entries, ctx.base), session_id: input.session_id, ts: new Date().toISOString() };
   atomicWrite(path.join(stateDir, 'unit-scope.json'), rec);
 }
 
@@ -932,11 +945,10 @@ function evalEdit(input, ctx, v) {
   }
   if (role === 'unit' && !unitScopeAllows(info, ctx.base.rootNative)) {
     const rec = readJsonSafe(path.join(ctx.base.rootNative, AHQ, 'state', 'unit-scope.json'));
-    const guide = '【変更してよいファイル】は、見出しの行には何も書かず、次の行から1行に1つ、プロジェクトの最上位からの相対パス(例: src/a.js、src/**)で書いてください。';
     if (!rec || rec.valid !== true || !Array.isArray(rec.entries) || !rec.entries.length) {
-      v.deny(`命令書の【変更してよいファイル】を読み取れないため、unit は何も書き換えられません(${p})。${guide}`);
+      v.deny(`命令書の【変更してよいファイル】を読み取れないため、unit は何も書き換えられません(${p})。${SCOPE_GUIDE}`);
     } else {
-      v.deny(`命令書の【変更してよいファイル】に含まれていないため、${p} は書き換えられません。${guide}`);
+      v.deny(`命令書の【変更してよいファイル】に含まれていないため、${p} は書き換えられません。${SCOPE_GUIDE}`);
     }
   }
 }
