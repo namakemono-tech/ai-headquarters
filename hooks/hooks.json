@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|Agent|Task|Skill",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|Agent|Task",
         "hooks": [
           {
             "type": "command",
@@ -30,7 +30,7 @@
     ],
     "SubagentStart": [
       {
-        "matcher": "^(ai-headquarters:)?unit$",
+        "matcher": "^(ai-headquarters:)?(intel|plans|unit|inspector)$",
         "hooks": [
           {
             "type": "command",

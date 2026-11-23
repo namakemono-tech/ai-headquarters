@@ -15,7 +15,9 @@ after(() => {
 
 let seq = 0;
 // 既定の作戦記録は「目標の決心を省いた」形(最初の「承認」が計画の決心になる)。段階の見分けは下の「目標の決心と計画の決心」で確かめる(2026-11-22)
-const SKIPPED = '## 承認\n### 目標の決心\n省略: 指揮官が企図で目標をすべて示したため\n### 計画の決心\n未決心\n';
+// 0.4.0 から、計画の決心は「## 計画」に計画書が書かれているときだけ記録される(fingerprint.test.js)。そのため既定の作戦記録に計画の節を置く
+const PLAN = '\n## 計画\n手順1: unit。src/a.js\n';
+const SKIPPED = `## 承認\n### 目標の決心\n省略: 指揮官が企図で目標をすべて示したため\n### 計画の決心\n未決心\n${PLAN}`;
 function fix(ops = [], body = SKIPPED) {
   const root = path.join(TMP, `f${process.pid}-${++seq}`);
   fs.mkdirSync(root, { recursive: true });
@@ -208,7 +210,7 @@ describe('approval.js: session_id と番号の揺れ', () => {
 });
 
 describe('目標の決心と計画の決心(2026-11-22)', () => {
-  const body = (line) => `# OP-001 作戦記録\n\n## 承認\n### 目標の決心\n${line}\n### 計画の決心\n未決心\n`;
+  const body = (line) => `# OP-001 作戦記録\n\n## 承認\n### 目標の決心\n${line}\n### 計画の決心\n未決心\n${PLAN}`;
   const lockOff = (root) => fs.rmSync(path.join(root, '.ai-headquarters', 'state', 'unit-lock.json'), { force: true });
   test('「未決心」の作戦記録での最初の「承認」は目標の決心。unit は起動できない', () => {
     const root = fix(['OP-001'], body('未決心'));
@@ -216,7 +218,7 @@ describe('目標の決心と計画の決心(2026-11-22)', () => {
     const c = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     assert.match(c, /目標の決心として OP-001 に記録しました/);
     assert.match(c, /unit はまだ起動できません/);
-    assert.match(c, /計画を示し、改めて「承認」とだけ入力してもらってください/);
+    assert.ok(c.includes('計画を作戦記録の「## 計画」に書いて示し、改めて「承認」とだけ入力してもらってください'), c);
     assert.match(c, /欄の無い古い作戦記録/);
     const a = readApp(root);
     assert.equal(typeof a.goals, 'string');
@@ -252,7 +254,7 @@ describe('目標の決心と計画の決心(2026-11-22)', () => {
     });
   }
   test('見出しの次の空行は飛ばして、最初の行で見分ける', () => {
-    const root = fix(['OP-001'], '## 承認\n### 目標の決心\n\n修正: 損耗限度を2回に\n');
+    const root = fix(['OP-001'], `## 承認\n### 目標の決心\n\n修正: 損耗限度を2回に\n${PLAN}`);
     submit(root, '承認');
     assert.equal(launch(root, 'S1'), null);
   });

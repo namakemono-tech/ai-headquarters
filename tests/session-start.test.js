@@ -72,6 +72,52 @@ describe('session-start.js', () => {
   }
 });
 
+describe('session-start.js: 設定ファイルの役ごとのモデル(0.4.0)', () => {
+  function proj(cfg) {
+    const root = path.join(TMP, `p${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(path.join(root, '.ai-headquarters'), { recursive: true });
+    if (cfg !== undefined) fs.writeFileSync(path.join(root, '.ai-headquarters', 'config.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
+    return root;
+  }
+  const runIn = (root) => {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: root, CLAUDE_PLUGIN_ROOT: TMP };
+    const r = spawnSync(process.execPath, [SS], { input: JSON.stringify({ session_id: 'S1', hook_event_name: 'SessionStart', source: 'startup', cwd: root }), encoding: 'utf8', env });
+    assert.equal(r.status, 0);
+    return ctx(r).additionalContext;
+  };
+  const base = runIn(proj());
+  test('設定ファイルが無いとき、models が無いときは、案内は8行以内で、モデルの行は無い', () => {
+    assert.ok(base.split('\n').length <= 8);
+    assert.ok(!base.includes('役ごとのモデル'));
+    assert.equal(runIn(proj({ protect: { add: ['x'] } })), base);
+  });
+  test('models を書いたときだけ、その中身を1行足す', () => {
+    const t = runIn(proj({ models: { unit: 'opus', inspector: 'opus' } }));
+    const lines = t.split('\n');
+    assert.equal(lines.length, base.split('\n').length + 1);
+    const line = lines.find((l) => l.includes('役ごとのモデル'));
+    assert.ok(line);
+    assert.match(line, /unit=opus/);
+    assert.match(line, /inspector=opus/);
+  });
+  test('4体以外の名前や、使えない値は書かない', () => {
+    const line = runIn(proj({ models: { unit: 'sonnet', general: 'opus', plans: 3, intel: 'haiku\n悪い行' } })).split('\n').find((l) => l.includes('役ごとのモデル'));
+    assert.match(line, /unit=sonnet/);
+    assert.ok(!line.includes('general'));
+    assert.ok(!line.includes('plans'));
+    assert.ok(!line.includes('悪い行'));
+  });
+  for (const bad of ['{bad', '[]', '{"models": "opus"}', '{"models": []}', '{"models": {}}', '{"models": {"general": "opus"}}']) {
+    test(`壊れた設定、使えない models(${bad})では、足さずに終わる`, () => {
+      assert.equal(runIn(proj(bad)), base);
+    });
+  }
+  test('案内に、中規模以上の任務分析の初めに mission-order を読み込むことがある', () => {
+    assert.match(base, /任務分析の初め/);
+    assert.match(base, /mission-order/);
+  });
+});
+
 describe('hooks.json の登録', () => {
   const h = JSON.parse(fs.readFileSync(HOOKS, 'utf8')).hooks;
   for (const [ev, file] of [['SessionStart', 'session-start.js'], ['UserPromptSubmit', 'approval.js']]) {
@@ -86,7 +132,7 @@ describe('hooks.json の登録', () => {
   test('既存の PreToolUse と SubagentStart は変わらない', () => {
     assert.equal(h.PreToolUse[0].hooks[0].onFailure, 'block');
     assert.deepEqual(h.PreToolUse[0].hooks[0].args, ['${CLAUDE_PLUGIN_ROOT}/hooks/guard.js']);
-    assert.equal(h.SubagentStart[0].matcher, '^(ai-headquarters:)?unit$');
+    assert.equal(h.SubagentStart[0].matcher, '^(ai-headquarters:)?(intel|plans|unit|inspector)$');
     assert.deepEqual(h.SubagentStart[0].hooks[0].args, ['${CLAUDE_PLUGIN_ROOT}/hooks/guard.js', 'subagent-start']);
   });
 });

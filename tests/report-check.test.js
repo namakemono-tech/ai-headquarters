@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const FP = require('./fingerprint-helper');
 
 const RC = path.join(__dirname, '..', 'hooks', 'report-check.js');
 const GUARD = path.join(__dirname, '..', 'hooks', 'guard.js');
@@ -34,7 +35,7 @@ const run = (root, input) => runRaw(RC, JSON.stringify({ cwd: root, session_id: 
 const GOOD = {
   intel: '【任務番号】OP-001-1\n【結論】x\n【根拠】y\n【未解決・懸念】なし\n【推測】なし',
   plans: '【任務番号】OP-001-1\n【結論】x\n【根拠】y\n【未解決・懸念】なし\n【推測】なし',
-  inspector: '【任務番号】OP-001-3\n【結論】x\n【根拠】y\n【目標の達成】なし\n【未解決・懸念】なし\n【推測】なし',
+  inspector: '【任務番号】OP-001-3\n【結論】x\n【根拠】y\n【目標の達成】なし\n【未解決・懸念】なし\n【物差しの外の指摘】なし\n【推測】なし',
   unit: '【任務番号】OP-001-2\n【結論】x\n【根拠】y\n【実施内容】a.js を変更\n【目標の達成】なし\n【未解決・懸念】なし\n【推測】なし',
 };
 const BAD = '【任務番号】OP-009-1\n【結論】x\n【根拠】y\n【推測】なし'; // 【未解決・懸念】が欠け(unit では【実施内容】も)
@@ -146,6 +147,25 @@ describe('見出しの判定', () => {
     // intel と plans は【目標の達成】が無くても通る
     for (const role of ['intel', 'plans']) silent(stop(fix(), role, GOOD[role]));
   });
+  test('inspector だけ【物差しの外の指摘】が必須で、欠けていれば1回だけ差し戻す(0.4.0)', () => {
+    const noOut = GOOD.inspector.replace('【物差しの外の指摘】なし\n', '');
+    const root = fix();
+    const r = stop(root, 'inspector', noOut, 'A1');
+    assert.ok(isBlock(r));
+    assert.match(json(r).reason, /【物差しの外の指摘】/);
+    assert.ok(!isBlock(stop(root, 'inspector', noOut, 'A1')), '2回目は警告を付けて通す');
+    const h = handback(fix(), 'inspector', noOut);
+    assert.ok(isDeny(h));
+    assert.match(json(h).hookSpecificOutput.permissionDecisionReason, /【物差しの外の指摘】/);
+    // unit、intel、plans には求めない
+    silent(stop(fix(), 'unit', GOOD.unit));
+    assert.ok(!GOOD.unit.includes('物差しの外'));
+    for (const role of ['intel', 'plans']) silent(stop(fix(), role, GOOD[role]));
+  });
+  test('【物差しの外の指摘】の中身(重さと根拠)は問わない', () => {
+    const t = GOOD.inspector.replace('【物差しの外の指摘】なし', '【物差しの外の指摘】\n中: 変数名がそろっていない(src/a.js 12行)');
+    silent(stop(fix(), 'inspector', t));
+  });
   test('【目標の達成】の中身(必成と望成の行)は問わない', () => {
     const t = GOOD.unit.replace('【目標の達成】なし', '【目標の達成】\n必成: 達成\n望成1: 捨てた(損耗限度の試行1回に達したため)');
     silent(stop(fix(), 'unit', t));
@@ -165,7 +185,7 @@ describe('見出しの判定', () => {
     silent(stop(fix(), 'intel', t));
   });
   test('行頭の空白(全角を含む)は許す', () => {
-    const t = '  【任務番号】a\n\t【結論】b\n　【根拠】c\n　 【目標の達成】なし\n【未解決・懸念】d\n   【推測】e';
+    const t = '  【任務番号】a\n\t【結論】b\n　【根拠】c\n　 【目標の達成】なし\n【未解決・懸念】d\n 【物差しの外の指摘】なし\n   【推測】e';
     silent(stop(fix(), 'inspector', t));
   });
   test('見出しが行の途中にしか無ければ欠け', () => {
@@ -295,7 +315,7 @@ describe('unit の予約の解除', () => {
     const root = fix();
     fs.mkdirSync(path.join(root, '.ai-headquarters', 'operations'), { recursive: true });
     fs.writeFileSync(path.join(root, '.ai-headquarters', 'operations', 'OP-001.md'), 'x');
-    fs.writeFileSync(path.join(stateDir(root), 'approval.json'), JSON.stringify({ session_id: 'S1', operation: 'OP-001', ts: new Date().toISOString(), plan: '2026-11-22T00:00:00Z' }));
+    fs.writeFileSync(path.join(stateDir(root), 'approval.json'), JSON.stringify({ session_id: 'S1', operation: 'OP-001', ts: new Date().toISOString(), plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('x') }));
     const launch = () => {
       const r = runRaw(GUARD, JSON.stringify({
         session_id: 'S1', cwd: root, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'tu1',
@@ -474,12 +494,14 @@ describe('見出しの飾り', () => {
   });
 });
 
-describe('SKILL.md の記入例', () => {
-  const md = fs.readFileSync(path.join(__dirname, '..', 'skills', 'mission-order', 'SKILL.md'), 'utf8');
+describe('SKILL.md と plans.md の記入例', () => {
+  // plans の報告の記入例は、0.4.0 で agents/plans.md に移した
+  const md = fs.readFileSync(path.join(__dirname, '..', 'skills', 'mission-order', 'SKILL.md'), 'utf8')
+    + fs.readFileSync(path.join(__dirname, '..', 'agents', 'plans.md'), 'utf8');
   const block = (re) => { const m = re.exec(md); assert.ok(m, String(re)); return m[1]; };
   for (const [role, re] of [
     ['unit', /報告\(unit\)[^\n]*\n\n```text\n([\s\S]*?)```/],
-    ['plans', /報告\(plans\)[^\n]*\n\n```text\n([\s\S]*?)```/],
+    ['plans', /## 記入例\(報告\)[\s\S]*?```text\n([\s\S]*?)```/],
     ['unit', /## 報告\(各エージェント → メインセッション\)\n\n```text\n([\s\S]*?)```/],
   ]) {
     test(`${role} の記入例が通る: ${String(re).slice(1, 14)}`, () => {

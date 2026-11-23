@@ -125,7 +125,8 @@ describe('本文の命令書と報告の型', () => {
       const m = /^報告は(.*?)の順/m.exec(body(n));
       assert.ok(m);
       // 【実施内容】は unit だけ。【目標の達成】は unit と inspector に必須で、intel と plans は分けた完了条件を受けたときだけ書く
-      const expected = REPORT.filter((h) => (isUnit || h !== '実施内容') && (isUnit || n === 'inspector' || h !== '目標の達成'));
+      // 【物差しの外の指摘】は inspector だけ(0.4.0)
+      const expected = REPORT.filter((h) => (isUnit || h !== '実施内容') && (isUnit || n === 'inspector' || h !== '目標の達成') && (n === 'inspector' || h !== '物差しの外の指摘'));
       assert.deepEqual(heads(m[1]), expected);
       if (isUnit) assert.match(body(n), /【実施内容】には、変更したファイルの一覧を必ず書きます/);
       else assert.match(body(n), /【実施内容】は unit だけの欄なので書きません/);
@@ -139,11 +140,12 @@ describe('本文の命令書と報告の型', () => {
       assert.ok(!d.includes(': '));
     });
   }
-  test('inspector: Hooks に止められたら別の手段を試さず「未解決」(同じ行)', () => {
-    assert.match(body('inspector'), /^Hooks に操作を止められたら、別の手段を試さず、「未解決」として報告します/m);
+  test('inspector: Hooks か Claude Code の権限に止められたら別の手段を試さず「未解決」(同じ行。点検の中1)', () => {
+    assert.match(body('inspector'), /^Hooks か Claude Code の権限に操作を止められたら、別の手段\(ほかのシェル、ほかのツール\)を試さず、「未解決」として報告します/m);
   });
   test('unit: Hooks に止められたら別の手段を試さない(「未解決」として報告する節の中)', () => {
-    assert.match(body('unit'), /「未解決」として報告します。\n(?:- .*\n)*- Hooks に操作を止められたとき。別の手段.*試しません/);
+    // 点検の中1: 止めた主体に Claude Code の権限を入れ、必成目標でも望成目標でも、ほかのシェルやツールで試さない
+    assert.match(body('unit'), /「未解決」として報告します。\n(?:- .*\n)*- Hooks か Claude Code の権限に操作を止められたとき。必成目標でも望成目標でも、別の手段\(ほかのシェル、ほかのツール.*\)で同じことを試しません/);
   });
   test('inspector: git の節に設定ファイルの文言が無い', () => {
     const g = /^- 読み取り専用の git[\s\S]*?(?=^- 次の記号)/m.exec(body('inspector'));
@@ -175,7 +177,8 @@ describe('本文の命令書と報告の型', () => {
   test('unit: 必成を終えてから望成に着手し、損耗限度で止め、【目標の達成】に書く', () => {
     const b = body('unit');
     assert.match(b, /必成を終えてから望成に着手します/);
-    assert.match(b, /損耗限度(\(試行の回数と時間\))?に達したら、繰り返さずに止め/);
+    assert.match(b, /損耗限度\(試行の回数\)に達したら、繰り返さずに止め/);
+    assert.ok(!b.includes('時間'), '損耗限度の時間はやめた(0.4.0)');
     assert.match(b, /【目標の達成】には、必成と望成のそれぞれについて/);
   });
   test('intel: 状況の特質を5つの観点で整理し、敵の可能行動は5つまで、最も起こりやすいものと最も痛いもの', () => {
@@ -204,10 +207,21 @@ describe('本文の命令書と報告の型', () => {
     assert.ok(b.includes('【行動方針の分析】') && b.includes('【致命的な弱点】'));
     assert.match(b, /すべての案を、1回でまとめて分析します/);
   });
-  test('inspector: 合否は命令書の必成、制約、既存の動作で決め、望成の未達成は不合格にしない', () => {
+  test('inspector: 合否は点検の物差しだけで決め、重さを付け、物差しの外は【物差しの外の指摘】に書く(0.4.0)', () => {
     const b = body('inspector');
-    assert.match(b, /合否は、命令書の【完了条件】の必成、【制約】を守ったこと、既存の動作を壊していないこと/);
+    assert.match(b, /合否は、点検の物差しだけで決めます。物差しは、命令書の【完了条件】の必成\(物1 などの番号つき\)と、いつも入る2つ\(【制約】を守ったこと、既存の動作を壊していないこと\)です/);
+    assert.match(b, /重: このまま進むと必成目標を達成できない、または後の任務が誤った前提で進む。中: 進めるが、あとで直す手戻りが出る。軽: 進んでも支障がない/);
+    assert.match(b, /不合格の理由にせず、【物差しの外の指摘】に重さと根拠を付けて書きます/);
+    assert.match(b, /行動方針の分析と計画の反対検討では「なし」と書きます/);
     assert.match(b, /望成の未達成だけでは不合格にせず/);
+  });
+  test('inspector: 止める記号は、実装のとおり $ ( ) { } を単独で並べる(0.4.0 で食い違いを確かめた)', () => {
+    assert.match(body('inspector'), /&&、\|\|、;、\|、&、>、>>、<、\$、\(、\)、\{、\}、バッククォート、改行/);
+  });
+  test('plans: 報告の記入例は plans の本文にある(0.4.0 で mission-order から移した)', () => {
+    const b = body('plans');
+    assert.match(b, /^## 記入例\(報告\)$/m);
+    assert.match(b, /記入例は下の「記入例\(報告\)」に従います/);
   });
   test('agents: 4体のまま', () => {
     assert.deepEqual(fs.readdirSync(path.join(ROOT, 'agents')).filter((f) => f.endsWith('.md')).sort(), ['inspector.md', 'intel.md', 'plans.md', 'unit.md']);
@@ -263,7 +277,8 @@ describe('unit: 権限や Hooks で止められた望成目標(2026-11-21)', () 
   const u = body('unit');
   test('未解決として報告する場合の例外として、望成目標は試行1回と数えて捨てる', () => {
     const sec = u.slice(u.indexOf('## 未解決として報告する場合'));
-    assert.match(sec, /望成目標のための操作が止められたときは、別の手段を試さず、試行1回と数えます。損耗限度に達したら「捨てた」と報告し、何の権限があれば達成できたかを書きます/);
+    assert.match(sec, /望成目標のための操作が止められたときは、あわせて試行1回と数えます。損耗限度に達したら、【目標の達成】に「捨てた」と書き、何の権限があれば達成できたかを書きます/);
+    assert.doesNotMatch(sec, /ただし、望成目標/, '望成目標を「未解決」の例外にしない(点検の中1)');
   });
 });
 

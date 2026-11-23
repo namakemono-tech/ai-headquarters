@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const FP = require('./fingerprint-helper');
 
 const GUARD = path.join(__dirname, '..', 'hooks', 'guard.js');
 fs.mkdirSync(path.join(__dirname, '.tmp'), { recursive: true });
@@ -467,7 +468,7 @@ describe('承認の関門・予約・範囲', () => {
   const approved = (extra = {}) => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
     '.ai-headquarters/operations/OP-002.md': 'b',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-002', plan: '2026-11-22T00:00:00Z' },
+    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-002', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('b') },
     ...extra,
   });
 
@@ -501,7 +502,7 @@ describe('承認の関門・予約・範囲', () => {
   test('作戦番号は数値で比べる(OP-9 と OP-10)', () => {
     const root = fix({
       '.ai-headquarters/operations/OP-9.md': 'a', '.ai-headquarters/operations/OP-10.md': 'b',
-      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-10', plan: '2026-11-22T00:00:00Z' },
+      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-10', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('b') },
     });
     assert.equal(dec(agentCall(root)), null);
   });
@@ -568,10 +569,10 @@ describe('承認の関門・予約・範囲', () => {
     const root = withLock({ session_id: 'S1', status: 'running', created_at: Date.now() - 20 * 60000, started_at: Date.now() - 20 * 60000, agent_id: 'x' });
     assert.equal(dec(agentCall(root)), 'deny');
   });
-  test('別のセッションの記録は新しくても無効として置き換える', () => {
+  test('別のセッションの記録も、期限までは有効(0.4.0。それまでは新しくても無効として置き換えていた)', () => {
     const root = withLock({ session_id: 'OLD', status: 'running', created_at: Date.now(), started_at: Date.now(), agent_id: 'x' });
-    assert.equal(dec(agentCall(root)), null);
-    assert.equal(readJson(root, '.ai-headquarters/state/unit-lock.json').session_id, 'S1');
+    assert.equal(dec(agentCall(root)), 'deny');
+    assert.equal(readJson(root, '.ai-headquarters/state/unit-lock.json').session_id, 'OLD');
   });
   test('壊れた予約ファイルは古ければ置き換える', () => {
     const root = approved({ '.ai-headquarters/state/unit-lock.json': '{bad' });

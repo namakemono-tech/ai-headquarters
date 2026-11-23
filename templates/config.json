@@ -6,5 +6,9 @@
   "inspector": {
     "testCommands": ["python -m pytest"],
     "allowedOptions": ["-q"]
+  },
+  "models": {
+    "unit": "opus",
+    "inspector": "opus"
   }
 }

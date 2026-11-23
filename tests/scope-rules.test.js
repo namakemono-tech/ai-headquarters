@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const FP = require('./fingerprint-helper');
 
 const GUARD = path.join(__dirname, '..', 'hooks', 'guard.js');
 fs.mkdirSync(path.join(__dirname, '.tmp'), { recursive: true });
@@ -22,7 +23,7 @@ function makeRoot() {
     fs.writeFileSync(path.join(root, rel), typeof v === 'string' ? v : JSON.stringify(v));
   };
   w('.ai-headquarters/operations/OP-001.md', 'x');
-  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' });
+  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('x') });
   return root;
 }
 function run(root, input, extra = {}) {

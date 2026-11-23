@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const FP = require('./fingerprint-helper');
 
 const GUARD = path.join(__dirname, '..', 'hooks', 'guard.js');
 fs.mkdirSync(path.join(__dirname, '.tmp'), { recursive: true });
@@ -181,7 +182,7 @@ describe('点検の指摘 3: cd の追跡', () => {
 describe('点検の指摘 4・9: 命令書の範囲の読み方と、unit の関門', () => {
   const ok = () => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
+    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('a') },
   });
   const call = (root, prompt, agent = null, type = 'ai-headquarters:unit') =>
     pre(root, { agent, tool: 'Agent', input: { subagent_type: type, prompt, description: 'd' } });
@@ -313,7 +314,7 @@ describe('点検の指摘 10・11: 照合の計算量と rm の短いオプシ�
   });
   test('範囲の照合でも同様', () => {
     const root = fix({
-      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
+      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('a') },
     });
     const prompt = '【変更してよいファイル】\n- ' + '**/'.repeat(12) + 'x.js';
     assert.equal(dec(pre(root, { tool: 'Agent', input: { subagent_type: 'unit', prompt } })), null);
@@ -329,5 +330,18 @@ describe('点検の指摘 10・11: 照合の計算量と rm の短いオプシ�
   }
   for (const c of ['rm -Force x', 'rm -vf x', 'rm -fv x', 'rm -Confirm:$false x', 'rm -f -v x']) {
     test(`再帰ではない: ${c}`, () => assert.equal(dec(sh(fix(), null, c)), null, c));
+  }
+});
+
+describe('inspector が止める記号の理由文は、実装のとおり(0.4.0。動きは変えない)', () => {
+  for (const c of ['npm test $X', 'npm test (a)', 'npm test a)', 'npm test {a}', 'npm test }']) {
+    test(`止める: ${c}`, () => {
+      const r = sh(fix(), 'inspector', c);
+      assert.equal(dec(r), 'deny');
+      const why = reason(r);
+      for (const s of ['$', '(', ')', '{', '}']) assert.ok(why.includes(`${s} `) || why.includes(`${s}、`) || why.includes(`${s})`), `${s}: ${why}`);
+      assert.match(why, /それぞれ単独でも/);
+      assert.ok(!why.includes('$( '), why);
+    });
   }
 });
