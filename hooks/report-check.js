@@ -7,7 +7,7 @@ const path = require('node:path');
 const AHQ = '.ai-headquarters';
 const ROLE_RE = /^(ai-headquarters:)?(intel|plans|unit|inspector)$/;
 const RETENTION_MS = 24 * 60 * 60 * 1000;
-const BASE_HEADINGS = ['任務番号', '結論', '根拠', '未解決・懸念', '推測'];
+const BASE_HEADINGS = ['任務番号', '結論', '根拠', '未解決・懸念', '引き継ぎ', '推測'];
 const HEAD_PREFIX = /^[ \t\u3000#>*-]*/.source;
 const LOCK_WAIT_MS = 3000; // 全件のテストのような高い負荷でも取れるよう3秒(ロックの待ち時間を3秒に延ばした理由)。report-check の timeout(10秒)より十分短い
 const LOCK_RETRY_MS = 20;
@@ -25,13 +25,13 @@ function atomicWrite(p, obj) {
 }
 
 function missingHeadings(text, role) {
-  // 【実施内容】は unit だけ。【目標の達成】(0.2.0)は unit と inspector だけ。【物差しの外の指摘】(0.4.0)は inspector だけ。並びは報告の型の順
+  // 【実施内容】は unit だけ。【目標の達成】(0.2.0)は unit と inspector だけ。【物差しの外の指摘】(0.4.0)は inspector だけ。【引き継ぎ】(0.5.0)は4体とも。並びは報告の型の順
   const need = [...BASE_HEADINGS.slice(0, 3)];
   if (role === 'unit') need.push('実施内容');
   if (role === 'unit' || role === 'inspector') need.push('目標の達成');
-  need.push(BASE_HEADINGS[3]);
+  need.push(BASE_HEADINGS[3], BASE_HEADINGS[4]);
   if (role === 'inspector') need.push('物差しの外の指摘');
-  need.push(...BASE_HEADINGS.slice(4));
+  need.push(BASE_HEADINGS[5]);
   // 行頭の空白と、Markdown の飾り(# > - * **)は許す。行の途中の見出しは数えない
   return need.filter((h) => !new RegExp(HEAD_PREFIX + '【' + h + '】', 'm').test(text)).map((h) => `【${h}】`);
 }

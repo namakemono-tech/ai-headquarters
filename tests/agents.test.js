@@ -36,12 +36,12 @@ const load = (n) => parseFrontmatter(fs.readFileSync(path.join(ROOT, 'agents', `
 
 // requirements.md の「各エージェントの定義」の表を読む
 function readTable() {
-  const start = REQ.indexOf('## 各エージェントの定義');
+  const start = REQ.indexOf('### 3.2 各エージェントの定義'); // 0.5.0 で 3.2 に移った
   assert.ok(start >= 0);
   const rows = {};
   const lines = REQ.slice(start).split('\n');
   for (const line of lines.slice(1)) {
-    if (/^## /.test(line)) break;
+    if (/^##? /.test(line) || /^### /.test(line)) break;
     const cells = line.split('|').map((s) => s.trim());
     if (cells.length < 6 || !NAMES.includes(cells[1])) continue;
     const model = /^(haiku|sonnet|opus)/.exec(cells[4]);
@@ -148,7 +148,7 @@ describe('本文の命令書と報告の型', () => {
     assert.match(body('unit'), /「未解決」として報告します。\n(?:- .*\n)*- Hooks か Claude Code の権限に操作を止められたとき。必成目標でも望成目標でも、別の手段\(ほかのシェル、ほかのツール.*\)で同じことを試しません/);
   });
   test('inspector: git の節に設定ファイルの文言が無い', () => {
-    const g = /^- 読み取り専用の git[\s\S]*?(?=^- 次の記号)/m.exec(body('inspector'));
+    const g = /^- 読み取りだけの ls[\s\S]*?(?=^- 次の記号)/m.exec(body('inspector'));
     assert.ok(g);
     assert.ok(!g[0].includes('設定'));
   });
@@ -178,7 +178,7 @@ describe('本文の命令書と報告の型', () => {
     const b = body('unit');
     assert.match(b, /必成を終えてから望成に着手します/);
     assert.match(b, /損耗限度\(試行の回数\)に達したら、繰り返さずに止め/);
-    assert.ok(!b.includes('時間'), '損耗限度の時間はやめた(0.4.0)');
+    assert.ok(!/損耗限度[^。\n]*時間/.test(b), '損耗限度の時間はやめた(0.4.0。0.5.0 の持ち時間は別のもの)');
     assert.match(b, /【目標の達成】には、必成と望成のそれぞれについて/);
   });
   test('intel: 状況の特質を5つの観点で整理し、敵の可能行動は5つまで、最も起こりやすいものと最も痛いもの', () => {
@@ -246,7 +246,7 @@ describe('inspector の本文と guard.js の一致', () => {
     assert.ok(m);
     assert.deepEqual(m[1].split('、').map((s) => s.trim()), TEST_CMDS);
   });
-  for (const sub of ['diff', 'status', 'log', 'show']) {
+  for (const sub of ['diff', 'status', 'log', 'show', 'ls-files']) {
     test(`git ${sub} のオプションが GIT_OPTIONS と一致`, () => {
       const m = new RegExp(`^ {2}- git ${sub}: (.*)$`, 'm').exec(b);
       assert.ok(m);
@@ -277,7 +277,8 @@ describe('unit: 権限や Hooks で止められた望成目標(2026-11-21)', () 
   const u = body('unit');
   test('未解決として報告する場合の例外として、望成目標は試行1回と数えて捨てる', () => {
     const sec = u.slice(u.indexOf('## 未解決として報告する場合'));
-    assert.match(sec, /望成目標のための操作が止められたときは、あわせて試行1回と数えます。損耗限度に達したら、【目標の達成】に「捨てた」と書き、何の権限があれば達成できたかを書きます/);
+    // 第3段: 試行の数え方は、unit に読み込まれる mission-order の全員の義務にまとめた
+    assert.match(SKILL, /望成目標のための操作が止められたときは、あわせて試行1回と数え、損耗限度に達したら「捨てた」と【目標の達成】に書き、何の権限があれば達成できたかを添えます/);
     assert.doesNotMatch(sec, /ただし、望成目標/, '望成目標を「未解決」の例外にしない(点検の中1)');
   });
 });
@@ -289,8 +290,9 @@ describe('inspector: 監察の合否と確かめ方(2026-11-22)', () => {
     assert.doesNotMatch(i, /既存のテストが通ることなど/);
   });
   test('要件にもある', { skip: SKIP_REQ }, () => {
-    assert.match(REQ, /既存の動作を壊していないことをどう確かめるか\(テストを実行する、コードを読むなど\)は、inspector が決めて報告する/);
-    assert.match(REQ, /「テストを実行すること」を望成目標にしたときは、規律と食い違わないので、区分を改めずにそのまま扱う/);
+    // 0.5.0 で 7.2 に1か所にまとめた
+    assert.match(REQ, /\(イ\)の確かめ方\(テストを実行する、コードを読むなど\)は、inspector が決めて報告する/);
+    assert.match(REQ, /テストの実行を望成目標にした指揮官の指定は、規律と食い違わないので、改めない/);
     assert.doesNotMatch(REQ, /既存のテストが通ることなど/);
   });
 });

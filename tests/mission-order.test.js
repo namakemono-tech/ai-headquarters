@@ -40,7 +40,7 @@ describe('SKILL.md の形式', () => {
 });
 
 describe('8つの型が requirements.md と同じ見出し・同じ順(0.2.0。0.4.1 で処置事項の一覧を足して8つ)', { skip: SKIP_REQ }, () => {
-  const reqBlocks = HAS_REQ ? codeBlocks(section(REQ, '## 命令書と報告の型').split('## 作戦の流れ')[0]) : [];
+  const reqBlocks = HAS_REQ ? codeBlocks(section(REQ, '## 10. 型').split('## 11. ')[0]) : [];
   const skillBlocks = codeBlocks(SKILL.split('## 記入例')[0]);
   const names = ['命令書', '完了条件の分け方', '報告', '計画書', '状況の特質', '行動方針案', '行動方針の分析', '処置事項の一覧'];
   test('型のコードブロックは8つ', () => {
@@ -55,13 +55,14 @@ describe('8つの型が requirements.md と同じ見出し・同じ順(0.2.0。0
       assert.deepEqual(headings(skillBlocks[i]), headings(reqBlocks[i]));
     });
   });
-  test('見出し数(命令書8・完了条件1・報告8(0.4.0 で【物差しの外の指摘】)・計画書6(0.4.0 で【使う資源】を削った)・状況の特質5・行動方針案3・行動方針の分析2)', () => {
-    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 8, 6, 5, 3, 2, 0]);
+  test('見出し数(命令書9(0.5.0 で【統制】)・完了条件1・報告9(0.5.0 で【引き継ぎ】)・計画書4(0.5.0 で4つの見出し)・状況の特質5・行動方針案3・行動方針の分析2)', () => {
+    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [9, 1, 9, 4, 5, 3, 2, 0]);
     assert.ok(!SKILL.includes('使う資源'));
   });
-  test('報告の【物差しの外の指摘】は【未解決・懸念】と【推測】の間(0.4.0)', () => {
+  test('報告の【引き継ぎ】は【未解決・懸念】のすぐあと、【物差しの外の指摘】は【引き継ぎ】と【推測】の間(0.5.0)', () => {
     const h = headings(skillBlocks[2]);
-    assert.equal(h.indexOf('物差しの外の指摘'), h.indexOf('未解決・懸念') + 1);
+    assert.equal(h.indexOf('引き継ぎ'), h.indexOf('未解決・懸念') + 1);
+    assert.equal(h.indexOf('物差しの外の指摘'), h.indexOf('引き継ぎ') + 1);
     assert.equal(h.indexOf('推測'), h.indexOf('物差しの外の指摘') + 1);
   });
   test('報告の【目標の達成】は【実施内容】と【未解決・懸念】の間', () => {
@@ -164,26 +165,26 @@ describe('記入例の報告', { skip: SKIP_REQ }, () => {
   // plans の報告の記入例は、0.4.0 で agents/plans.md に移した(削11。要るのは plans だけのため)
   const PLANS = fs.readFileSync(path.join(ROOT, 'agents', 'plans.md'), 'utf8').replace(/\r\n/g, '\n');
   const plansReport = codeBlocks(section(PLANS, '## 記入例(報告)'))[0];
-  // 必須の見出しは、requirements.md の「必須の見出しは…の5つ」の行から取り出す
+  // 必須の見出しは、requirements.md の「必須の見出しは…の6つ」の行から取り出す(0.5.0 で【引き継ぎ】を足した)
   const reqLine = HAS_REQ ? REQ.split('\n').find((l) => l.includes('必須の見出しは')) : '';
-  const required = [...reqLine.slice(0, reqLine.indexOf('の5つ')).matchAll(/【([^】]+)】/g)].map((m) => m[1]);
+  const required = [...reqLine.slice(0, reqLine.indexOf('の6つ')).matchAll(/【([^】]+)】/g)].map((m) => m[1]);
   const coaHeads = headings(codeBlocks(SKILL.split('## 記入例')[0])[5]);
-  test('必須の見出しは、requirements.md から5つ取り出せる', () => {
-    assert.equal(required.length, 5);
-    assert.deepEqual(required, ['任務番号', '結論', '根拠', '未解決・懸念', '推測']);
+  test('必須の見出しは、requirements.md から6つ取り出せる', () => {
+    assert.equal(required.length, 6);
+    assert.deepEqual(required, ['任務番号', '結論', '根拠', '未解決・懸念', '引き継ぎ', '推測']);
   });
   test('mission-order の記入例はちょうど2つ(命令書・報告(unit))。plans の報告の記入例は agents/plans.md にある', () => {
     assert.equal(codeBlocks(section(SKILL, '## 記入例')).length, 2);
     assert.ok(unitReport && plansReport);
     assert.match(SKILL, /記入例は plans の本文にあります/);
   });
-  test('unit の報告: 必須の5つが行の先頭にあり、【実施内容】と【目標の達成】もある', () => {
+  test('unit の報告: 必須の6つが行の先頭にあり、【実施内容】と【目標の達成】もある', () => {
     for (const h of [...required, '実施内容', '目標の達成']) assert.match(unitReport, new RegExp(`^【${h}】`, 'm'), h);
     const g = unitReport.split(/^【目標の達成】/m)[1].split(/^【/m)[0];
     assert.match(g, /必成: 達成/);
     assert.match(g, /望成1: /);
   });
-  test('plans の報告: 必須の5つが行の先頭にある(【実施内容】は不要)', () => {
+  test('plans の報告: 必須の6つが行の先頭にある(【実施内容】は不要)', () => {
     for (const h of required) assert.match(plansReport, new RegExp(`^【${h}】`, 'm'), h);
     assert.doesNotMatch(plansReport, /^【実施内容】/m);
   });
@@ -213,8 +214,8 @@ describe('報告の決まり:指揮官の指定でないものを指定として
     const rules = section(SKILL, '### 報告の決まり').split(/^## /m)[0];
     assert.match(rules, /指揮官の指定でないものを、指定として書きません/);
   });
-  test('要件の報告の型の決まりにもある', { skip: SKIP_REQ }, () => {
-    const req = section(REQ, '## 命令書と報告の型').split('## 作戦の流れ')[0];
+  test('要件の目標の扱いの決まりにもある(0.5.0 で 7.1 に移った)', { skip: SKIP_REQ }, () => {
+    const req = section(REQ, '### 7.1 目標の扱い').split('### 7.2 ')[0];
     assert.match(req, /指揮官の指定でないものを、指定として書かない/);
   });
 });
@@ -224,9 +225,9 @@ describe('権限や Hooks で止められた望成目標(2026-11-21)', () => {
   test('全員の義務: 望成目標の作業なら、試行1回と数え、限度に達したら捨てる', () => {
     assert.match(duty, /望成目標のための操作が止められたときは、あわせて試行1回と数え、損耗限度に達したら「捨てた」と【目標の達成】に書き、何の権限があれば達成できたかを添えます/);
   });
-  test('分け方の決まりにも、止められた試行を数えることを書く', () => {
+  test('止められた試行を数えることは、全員の義務に1か所だけ書く(第3段で重なりを削った)', () => {
     const rules = section(SKILL, '### 完了条件の分け方').split(/^## /m)[0];
-    assert.match(rules, /権限や Hooks で止められた試行も、1回と数えます/);
+    assert.doesNotMatch(rules, /権限や Hooks で止められた試行も、1回と数えます/);
   });
   test('要件にもある', { skip: SKIP_REQ }, () => {
     assert.match(REQ, /望成目標のための試行が、権限や Hooks で止められたときも、損耗限度の試行1回と数える/);
@@ -273,7 +274,7 @@ describe('処置事項の一覧と、期限と見積もり(0.4.1)', () => {
     assert.match(sec, /指揮官への報告の「決めていただくこと」のすぐあとに置きます。処置事項が無ければ書きません/);
     assert.match(sec, /指揮官が直しそうなもの\(迷って決めたものを含む\)を上に並べます/);
     assert.match(sec, /番号は、作戦を通した連番\(処1、処2\)です/);
-    assert.match(sec, /同じ行を、作戦記録の「## 途中修正」に書き、指揮官の答え\(承認の日時、または直し\)をあとから足します/);
+    assert.match(sec, /同じ行を、作戦記録の「## 処置事項」に1行に1件で書き、指揮官の答え\(承認の日時、または直し\)をあとから足します/);
     assert.match(sec, /その報告への「承認」で済みます\(決心や節目の承認と兼ねます\)/);
     assert.match(sec, /挙げなかった番号は、承認として扱います/);
     assert.match(sec, /その報告が計画の決心か節目を兼ねていたときだけ、反映のあとに「承認」を1回求めます。目標の決心では、改めて「承認」を求めません/);

@@ -43,7 +43,7 @@ describe('session-start.js', () => {
     assert.equal(o.hookEventName, 'SessionStart');
     assert.equal(typeof o.additionalContext, 'string');
     assert.ok(o.additionalContext.split('\n').length <= 8);
-    for (const w of ['規模', '中規模以上', 'Explore', 'intel', 'plans', 'unit', 'inspector']) assert.ok(o.additionalContext.includes(w), w);
+    for (const w of ['規模', '作戦', 'Explore', 'intel', 'plans', 'unit', 'inspector']) assert.ok(o.additionalContext.includes(w), w);
   });
   test('プラグイン版は ai-headquarters:mission-analysis', () => {
     assert.ok(ctx(run(good, true)).additionalContext.includes('ai-headquarters:mission-analysis'));

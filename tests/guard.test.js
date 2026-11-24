@@ -152,8 +152,9 @@ describe('inspector の許可リスト(テストコマンド)', () => {
       });
     }
   }
+  // ls は、0.5.0 の第3段で読み取りだけ許した(inspector の git 許可リストの節で確かめる)
   const ngCmds = [
-    'ls', 'cat package.json', 'npm install', 'npm run build', 'node script.js', 'node --test --import ./x.js', 'npm test --coverage',
+    'cat package.json', 'npm install', 'npm run build', 'node script.js', 'node --test --import ./x.js', 'npm test --coverage',
     'npm test -- --coverage', 'pytest -k foo', 'go test -run X', 'npm test && echo hi', 'npm test || true', 'npm test; ls', 'npm test | tee o',
     'npm test & ls', 'npm test > out.txt', 'npm test >> out.txt', 'pytest < in.txt', 'npm test $(whoami)', 'npm test `whoami`',
     'npm test\nls', 'npm test\r\nls', 'pytest "a;b"', "pytest 'a|b'", 'pytest "a&b"', 'pytest "a>b"', 'FOO=1 npm test', 'npm test \\--import=x',
@@ -193,6 +194,8 @@ describe('inspector の git 許可リスト', () => {
     'git log -n 5', 'git log --stat', 'git log --format=%h', 'git log --format=%h -- src/a.js', 'git show --stat HEAD',
     'git show --name-only abc123', 'git diff', 'git diff --stat', 'git diff --name-only', 'git diff --name-status HEAD~1',
     'git diff --cached', 'git diff --staged --stat', 'git diff main..feature -- src/a.js', 'git show HEAD:src/a.js',
+    // 0.5.0 の第3段(指揮官の決心): 読み取りだけの ls と git ls-files
+    'ls', 'ls docs', 'ls -la docs', 'ls -1 src', 'ls -R tests', 'ls src/a.js', 'git ls-files', 'git ls-files docs', 'git ls-files --others --exclude-standard', 'git ls-files --deleted',
   ];
   for (const c of pass) {
     test(`通す: ${c}`, () => {
@@ -208,6 +211,9 @@ describe('inspector の git 許可リスト', () => {
     'git log --ext-diff', 'git branch', 'git commit -m x', 'git checkout main', 'git push', 'git diff -p', 'git status -b',
     'git log --format="%h|%s"', 'git log --graph', 'git show --ext-diff HEAD', 'git', 'git status && ls', 'git diff -c',
     'git log --pretty=oneline', 'git diff --no-index a b', 'git show -s', 'git status --ignored',
+    'ls --color=always', 'ls -la > x.txt', 'ls; rm x', 'ls -d', 'git ls-files -z', 'git ls-files --with-tree=HEAD', 'git -C . ls-files', 'ls .env', 'git ls-files .env',
+    // T16 の点検: PowerShell の ls(Get-ChildItem)で、環境変数、レジストリ、ネットワークのパスを読ませない
+    'ls env:', 'ls Env:', 'ls env:API_KEY', 'ls HKCU:\\Software', 'ls cert:', 'ls \\\\server\\share', 'ls //server/share',
   ];
   for (const c of block) {
     test(`止める: ${c}`, () => {
