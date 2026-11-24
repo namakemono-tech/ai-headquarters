@@ -147,6 +147,33 @@ describe('指紋の書式', () => {
   });
 });
 
+describe('期限の行(「### 起動の上限」の2行目。0.4.1)', () => {
+  const withDl = (line2 = '期限: 作業の時間で3時間まで(幕僚の見積もり。実測前の仮の値)') => OP({ goals: GOALS.replace('6回(見込み 4回)', `6回(見込み 4回)\n${line2}`) });
+  test('2行目に数字を含む期限があっても、起動の上限は1行目の値', () => {
+    assert.equal(FP.launchLimitOf(withDl()), 6);
+    assert.equal(FP.launchLimitOf(withDl('期限: 2026-12-01 18:00(指揮官の指定)')), 6);
+  });
+  test('期限を1行目に書くと、上限が読み取れない(順番を守る)', () => {
+    assert.equal(FP.launchLimitOf(OP({ goals: GOALS.replace('6回(見込み 4回)', '期限: 作業の時間で3時間まで\n6回(見込み 4回)') })), null);
+  });
+  test('期限の行は指紋に入る。書き換えると指紋が変わる', () => {
+    assert.notEqual(FP.fingerprintOf(withDl()), FP.fingerprintOf(OP()));
+    assert.notEqual(FP.fingerprintOf(withDl('期限: 作業の時間で5時間まで')), FP.fingerprintOf(withDl()));
+  });
+  test('計画の決心のあとに期限を書き換えると unit の起動が止まり、「承認」を入れ直すと通る', () => {
+    const root = fix(withDl());
+    approve(root);
+    assert.equal(readApp(root).launch_limit, 6);
+    assert.equal(launch(root).d, null);
+    edit(root, '期限: 作業の時間で3時間まで', '期限: 作業の時間で5時間まで');
+    const r = launch(root);
+    assert.equal(r.d, 'deny');
+    assert.match(r.reason, /書き換えられています/);
+    approve(root);
+    assert.equal(launch(root).d, null);
+  });
+});
+
 describe('計画が無いときの「承認」', () => {
   const cases = [
     ['「未作成」のまま', '## 計画\n未作成\n'],

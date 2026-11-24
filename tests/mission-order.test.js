@@ -39,13 +39,16 @@ describe('SKILL.md の形式', () => {
   });
 });
 
-describe('7つの型が requirements.md と同じ見出し・同じ順(0.2.0)', { skip: SKIP_REQ }, () => {
+describe('8つの型が requirements.md と同じ見出し・同じ順(0.2.0。0.4.1 で処置事項の一覧を足して8つ)', { skip: SKIP_REQ }, () => {
   const reqBlocks = HAS_REQ ? codeBlocks(section(REQ, '## 命令書と報告の型').split('## 作戦の流れ')[0]) : [];
   const skillBlocks = codeBlocks(SKILL.split('## 記入例')[0]);
-  const names = ['命令書', '完了条件の分け方', '報告', '計画書', '状況の特質', '行動方針案', '行動方針の分析'];
-  test('型のコードブロックは7つ', () => {
-    assert.equal(reqBlocks.length, 7);
-    assert.equal(skillBlocks.length, 7);
+  const names = ['命令書', '完了条件の分け方', '報告', '計画書', '状況の特質', '行動方針案', '行動方針の分析', '処置事項の一覧'];
+  test('型のコードブロックは8つ', () => {
+    assert.equal(reqBlocks.length, 8);
+    assert.equal(skillBlocks.length, 8);
+  });
+  test('処置事項の一覧の型は、要件と一字も違わない(見出しの【】が無い型のため、本文で比べる)', () => {
+    assert.equal(skillBlocks[7], reqBlocks[7]);
   });
   names.forEach((n, i) => {
     test(`${n}`, () => {
@@ -53,7 +56,7 @@ describe('7つの型が requirements.md と同じ見出し・同じ順(0.2.0)', 
     });
   });
   test('見出し数(命令書8・完了条件1・報告8(0.4.0 で【物差しの外の指摘】)・計画書6(0.4.0 で【使う資源】を削った)・状況の特質5・行動方針案3・行動方針の分析2)', () => {
-    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 8, 6, 5, 3, 2]);
+    assert.deepEqual(skillBlocks.map((b) => headings(b).length), [8, 1, 8, 6, 5, 3, 2, 0]);
     assert.ok(!SKILL.includes('使う資源'));
   });
   test('報告の【物差しの外の指摘】は【未解決・懸念】と【推測】の間(0.4.0)', () => {
@@ -251,5 +254,40 @@ describe('【変更してよいファイル】が読み取れないと、unit �
   test('書き方の決まりに、起動を止めることを書く', () => {
     assert.match(SKILL, /欄が無い、または読み取れないと、Hooks が unit の起動を止めます/);
     assert.doesNotMatch(SKILL, /Hooks が unit のすべての書き込みを止めます/);
+  });
+});
+
+describe('処置事項の一覧と、期限と見積もり(0.4.1)', () => {
+  const blocks = codeBlocks(SKILL.split('## 記入例')[0]);
+  const list = blocks[7] || '';
+  const sec = section(SKILL, '## 処置事項の一覧').split('## 書き方の決まり')[0];
+  test('型: 件数と、番号と直し方だけを書く案内。1件は1行で、内容と理由', () => {
+    assert.match(list, /^処置事項\(幕僚が決めたこと。\d+件。直したいものは、番号と直し方だけを書いてください\)$/m);
+    for (const l of list.trim().split('\n').slice(1)) assert.match(l, /^処\d+ .+。理由: .+/, l);
+  });
+  test('型は「大規模の計画で使う型」のあと、「書き方の決まり」の前', () => {
+    assert.ok(SKILL.indexOf('## 大規模の計画で使う型') < SKILL.indexOf('## 処置事項の一覧'));
+    assert.ok(SKILL.indexOf('## 処置事項の一覧') < SKILL.indexOf('## 書き方の決まり'));
+  });
+  test('決まり: 置き場所、並べ方、番号、作戦記録、入力、直し、中規模、一覧だけを別に示さない', () => {
+    assert.match(sec, /指揮官への報告の「決めていただくこと」のすぐあとに置きます。処置事項が無ければ書きません/);
+    assert.match(sec, /指揮官が直しそうなもの\(迷って決めたものを含む\)を上に並べます/);
+    assert.match(sec, /番号は、作戦を通した連番\(処1、処2\)です/);
+    assert.match(sec, /同じ行を、作戦記録の「## 途中修正」に書き、指揮官の答え\(承認の日時、または直し\)をあとから足します/);
+    assert.match(sec, /その報告への「承認」で済みます\(決心や節目の承認と兼ねます\)/);
+    assert.match(sec, /挙げなかった番号は、承認として扱います/);
+    assert.match(sec, /その報告が計画の決心か節目を兼ねていたときだけ、反映のあとに「承認」を1回求めます。目標の決心では、改めて「承認」を求めません/);
+    assert.match(sec, /中規模の最終報告の一覧には、「承認」を求めません。目標に「承認を受ける」とあるときだけ求め/);
+    assert.match(sec, /「必成目標: 一覧への承認を受ければ達成」/);
+    assert.match(sec, /一覧だけを、報告と別に示して「承認」を求めることはしません/);
+  });
+  test('報告の【実施内容】に「決めた点」。unit は重い手順の1回の時間を【根拠】に書く', () => {
+    assert.match(blocks[2], /^【実施内容】変更したファイル一覧\(部隊のみ\)。命令書が決めていない細部を自分で決めたときは、「決めた点」として内容と理由も書く$/m);
+    assert.match(SKILL, /unit は、重い手順では、1回にかかった時間を【根拠】に書きます/);
+  });
+  test('計画書の【手順】に重い手順。行動方針案の評価の材料に重い手順。状況の特質の【時間】は数字か測り方', () => {
+    assert.match(blocks[3], /^【手順】.*重い手順は、回数、1回の時間、合計\(実測か実測前か\)$/m);
+    assert.match(blocks[5], /評価の材料になる事実\(起動するサブエージェントの回数とモデル、重い手順の回数と時間、指揮官に求める手作業、依存するもの\)/);
+    assert.match(blocks[4], /^【時間】期限\(決心を受けたもの\)と、重い手順の回数と時間、使用量の見込み\(起動の回数とモデル\)。数字か、測り方を書く$/m);
   });
 });

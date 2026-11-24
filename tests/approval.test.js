@@ -305,3 +305,68 @@ describe('目標の決心と計画の決心(2026-11-22)', () => {
     assert.match(g.permissionDecisionReason, /計画の決心/);
   });
 });
+
+describe('2回目からの計画の決心の案内(0.4.1。新10)', () => {
+  const body = (line = '未決心') => `# OP-001 作戦記録\n\n## 承認\n### 目標の決心\n${line}\n### 計画の決心\n未決心\n${PLAN}`;
+  const ctx = (r) => JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  const opFile = (root) => path.join(root, '.ai-headquarters', 'operations', 'OP-001.md');
+  const lockOff = (root) => fs.rmSync(path.join(root, '.ai-headquarters', 'state', 'unit-lock.json'), { force: true });
+  const FIRST = (op, fp) => `指揮官の承認を、計画の決心として ${op} に記録しました(指紋 ${fp})。作戦記録の「### 計画の決心」に「承認: 日時(指紋 ${fp})」と書いてください。承認のあとに、目標の3つの欄(必成目標、点検の物差し、起動の上限)か計画の節を書き換えると、unit を起動できなくなります。`;
+  test('1回目の計画の決心の案内は、0.4.0 と同じ文', () => {
+    const root = fix(['OP-001'], body());
+    submit(root, '承認');
+    const c = ctx(submit(root, '承認'));
+    assert.equal(c, FIRST('OP-001', readApp(root).fingerprint));
+  });
+  test('目標の決心を省いた作戦の最初の「承認」も、1回目の文', () => {
+    const root = fix(['OP-001']);
+    const c = ctx(submit(root, '承認'));
+    assert.equal(c, FIRST('OP-001', readApp(root).fingerprint));
+  });
+  test('2回目からは「記録し直しました」。指紋が同じなら、書き換えの知らせは無い', () => {
+    const root = fix(['OP-001'], body());
+    submit(root, '承認'); submit(root, '承認');
+    const fp = readApp(root).fingerprint;
+    lockOff(root);
+    const c = ctx(submit(root, '承認'));
+    assert.match(c, /OP-001 に記録し直しました/);
+    assert.ok(c.includes('節目の承認。処置事項の一覧を示していたなら、その承認も兼ねます。'), c);
+    assert.ok(c.includes(`指紋 ${fp}`), c);
+    assert.ok(c.includes(`「承認: 日時(指紋 ${fp})」を足してください`), c);
+    assert.doesNotMatch(c, /と違います/);
+    assert.doesNotMatch(c, /計画の決心として OP-001 に記録しました/);
+    assert.equal(launch(root, 'S1'), null);
+  });
+  test('前の記録と指紋が違うときだけ、書き換えの知らせを足す(止めない)', () => {
+    const root = fix(['OP-001'], body());
+    submit(root, '承認'); submit(root, '承認');
+    const before = readApp(root).fingerprint;
+    lockOff(root);
+    fs.writeFileSync(opFile(root), body().replace('手順1: unit。src/a.js', '手順1: unit。src/a.js と src/b.js'));
+    const c = ctx(submit(root, '承認'));
+    const after2 = readApp(root).fingerprint;
+    assert.notEqual(after2, before);
+    assert.match(c, /記録し直しました/);
+    assert.ok(c.includes(`前の承認の指紋(${before})と違います。目標の3つの欄か計画の節が書き換えられています。書き換えた点を指揮官に示していなければ、いま示してください。`), c);
+    assert.ok(c.includes(`指紋 ${after2}`), c);
+    assert.equal(launch(root, 'S1'), null, '止める動きは変えない(記録し直した指紋で通る)');
+  });
+  test('別のセッションや新しい作戦記録では、1回目の扱い', () => {
+    const root = fix(['OP-001']);
+    submit(root, '承認', 'S1');
+    const s2 = ctx(submit(root, '承認', 'S2'));
+    assert.match(s2, /計画の決心として OP-001 に記録しました/);
+    assert.doesNotMatch(s2, /記録し直しました/);
+    const root2 = fix(['OP-001']);
+    submit(root2, '承認');
+    fs.writeFileSync(path.join(root2, '.ai-headquarters', 'operations', 'OP-002.md'), body('省略: 企図ですべて示された'));
+    const c = ctx(submit(root2, '承認'));
+    assert.match(c, /計画の決心として OP-002 に記録しました/);
+    assert.doesNotMatch(c, /記録し直しました/);
+  });
+  test('状態ファイルの形は変えない(時刻の欄を足さない)', () => {
+    const root = fix(['OP-001'], body());
+    submit(root, '承認'); submit(root, '承認'); lockOff(root); submit(root, '承認');
+    assert.deepEqual(Object.keys(readApp(root)).sort(), ['fingerprint', 'goals', 'operation', 'plan', 'session_id', 'ts']);
+  });
+});

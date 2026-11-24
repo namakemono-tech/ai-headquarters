@@ -129,9 +129,18 @@ function main() {
   const limit = launchLimitOf(log);
   if (limit !== null) rec.launch_limit = limit;
   atomicWrite(appPath, rec);
-  const text = stage === 'goals'
-    ? `指揮官の承認を、目標の決心として ${operation} に記録しました。unit はまだ起動できません。作戦記録の「### 目標の決心」の次の行を「承認: 」と日時に書き換え、計画を作戦記録の「## 計画」に書いて示し、改めて「承認」とだけ入力してもらってください。(欄の無い古い作戦記録では、このため「承認」が2回要ります。)`
-    : `指揮官の承認を、計画の決心として ${operation} に記録しました(指紋 ${rec.fingerprint})。作戦記録の「### 計画の決心」に「承認: 日時(指紋 ${rec.fingerprint})」と書いてください。承認のあとに、目標の3つの欄(必成目標、点検の物差し、起動の上限)か計画の節を書き換えると、unit を起動できなくなります。`;
+  // 同じセッションの同じ作戦で、計画の決心がすでに記録されていれば、記録し直し(節目の承認、処置事項の一覧への承認)として案内する(0.4.1)。
+  // 前の指紋と違うときだけ、書き換えの知らせを足す。止める動きと状態ファイルの形は変えない
+  const prevFp = prevPlan && typeof prev.fingerprint === 'string' && prev.fingerprint !== '' ? prev.fingerprint : null;
+  let text;
+  if (stage === 'goals') {
+    text = `指揮官の承認を、目標の決心として ${operation} に記録しました。unit はまだ起動できません。作戦記録の「### 目標の決心」の次の行を「承認: 」と日時に書き換え、計画を作戦記録の「## 計画」に書いて示し、改めて「承認」とだけ入力してもらってください。(欄の無い古い作戦記録では、このため「承認」が2回要ります。)`;
+  } else if (prevPlan) {
+    text = `指揮官の承認を、${operation} に記録し直しました(節目の承認。処置事項の一覧を示していたなら、その承認も兼ねます。指紋 ${rec.fingerprint})。作戦記録の「### 計画の決心」に「承認: 日時(指紋 ${rec.fingerprint})」を足してください。`;
+    if (prevFp && prevFp !== rec.fingerprint) text += `前の承認の指紋(${prevFp})と違います。目標の3つの欄か計画の節が書き換えられています。書き換えた点を指揮官に示していなければ、いま示してください。`;
+  } else {
+    text = `指揮官の承認を、計画の決心として ${operation} に記録しました(指紋 ${rec.fingerprint})。作戦記録の「### 計画の決心」に「承認: 日時(指紋 ${rec.fingerprint})」と書いてください。承認のあとに、目標の3つの欄(必成目標、点検の物差し、起動の上限)か計画の節を書き換えると、unit を起動できなくなります。`;
+  }
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',

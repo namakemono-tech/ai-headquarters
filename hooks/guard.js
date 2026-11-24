@@ -1049,9 +1049,9 @@ function unitGate(input, ctx, v) {
   // 予約の代わりに、実行中の unit が無いことだけを確かめる。許されて起動したら、起動の知らせ(SubagentStart)で実行中の記録を作る
   const lim = launchLimitState(root, latest);
   if (lim && lim.count >= lim.limit) {
-    if (!unitLockFree(stateDir)) { lockDenied(); return; }
-    // 無効になった古い記録(異常に終わった unit のもの)は、ここで取り除く(確かめの指摘の新1)。
-    // 残すと、許されて起動した unit の書き込みが「持ち主が、この unit ではありません」で止まるため
+    // 実行中の unit が無いことを確かめ、無効になった古い記録(異常に終わった unit のもの)は、ここで取り除く(確かめの指摘の新1)。
+    // 残すと、許されて起動した unit の書き込みが「持ち主が、この unit ではありません」で止まるため。
+    // 確かめと取り除きは、clearStaleLock の中で同じ読みについて行う(あいだに作られた有効な予約を取り除かない。0.4.1)
     if (!clearStaleLock(stateDir)) { lockDenied(); return; }
     fs.mkdirSync(stateDir, { recursive: true });
     writeScope();
@@ -1137,25 +1137,17 @@ function operationScale(text) {
   }
   return lines.some((l) => /^##\s*(行動方針の比較と結論|状況の特質)\s*$/.test(l.trim())) ? '大' : null;
 }
-// 予約を取らずに、unit の記録が無いか、無効かを確かめる
-function unitLockFree(stateDir) {
+// 無効になった記録を、一意な名前へ移して取り除く(reserveUnit と同じやり方。移せるのは1つのプロセスだけ)。
+// 記録が無い、または取り除けたら true。読んだ記録が有効なとき、移した記録が新しいもの(競合)だったときは、取り除かずに false。
+// 無効かの確かめは、ここで読んだ記録について行う(確かめてから読み直すあいだに作られた有効な予約を取り除かないため。0.4.1)
+function clearStaleLock(stateDir) {
   const lockPath = path.join(stateDir, 'unit-lock.json');
   let raw; let mtime;
   try { raw = fs.readFileSync(lockPath, 'utf8'); mtime = fs.statSync(lockPath).mtimeMs; } catch (e) {
     if (e && e.code === 'ENOENT') return true;
     throw e;
   }
-  return lockIsStale(raw, mtime, Date.now());
-}
-// 無効になった記録を、一意な名前へ移して取り除く(reserveUnit と同じやり方。移せるのは1つのプロセスだけ)。
-// 記録が無い、または取り除けたら true。移した記録が新しいもの(競合)だったら、戻して false
-function clearStaleLock(stateDir) {
-  const lockPath = path.join(stateDir, 'unit-lock.json');
-  let raw;
-  try { raw = fs.readFileSync(lockPath, 'utf8'); } catch (e) {
-    if (e && e.code === 'ENOENT') return true;
-    throw e;
-  }
+  if (!lockIsStale(raw, mtime, Date.now())) return false;
   const stale = `${lockPath}.stale.${process.pid}.${Math.random().toString(36).slice(2)}`;
   try { fs.renameSync(lockPath, stale); } catch { return !fs.existsSync(lockPath); }
   let moved = null;

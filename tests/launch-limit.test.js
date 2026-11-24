@@ -190,6 +190,14 @@ describe('起動の数え上げ', () => {
     assert.match(r.reason, /断ってください/);
     assert.match(r.reason, /メインセッションへ/);
   });
+  test('欄の2行目に期限の行(数字を含む)があっても、控える上限は1行目の値(0.4.1)', () => {
+    const root = fix(OP('2回(見込み 2回)\n期限: 作業の時間で30時間まで(幕僚の見積もり。実測前の仮の値)'));
+    approve(root);
+    started(root); started(root);
+    const r = before(root);
+    assert.equal(r.d, 'ask');
+    assert.match(r.reason, /起動の上限 2 回/);
+  });
   test('作戦記録の欄を書き換えても、「承認」のときに控えた値で数える', () => {
     const root = fix();
     approve(root);

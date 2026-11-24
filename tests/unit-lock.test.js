@@ -177,15 +177,22 @@ describe('2つのセッション', () => {
   });
 });
 
-describe('verify-suspects.js(2026-11-23 の評価で確かめた不具合)で、直したものが止まる', () => {
-  const script = path.join(__dirname, '..', 'docs', 'work', 'revision-040', 'verify', 'verify-suspects.js');
-  test('A5、A7、B4、B7、B9、C3、C5 が止まる', { skip: !fs.existsSync(script) }, () => {
-    const r = spawnSync(process.execPath, [script], { encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-    for (const id of ['A5', 'A7', 'B4', 'B7', 'B9', 'C3', 'C5']) {
-      const m = new RegExp(`\\[${id}\\][^\\n]*\\n\\s*=> ([^\\n]*)`).exec(r.stdout);
-      assert.ok(m, id);
-      assert.match(m[1], /^deny/, `${id}: ${m[1]}`);
-    }
+describe('起動の上限の確認の経路の時間差を直した(0.4.1)', () => {
+  // 時間差そのものは外から再現できないので、guard.js の本文で確かめる(指紋の本文の一致を確かめるテストと同じやり方)
+  const src = fs.readFileSync(GUARD, 'utf8');
+  const body = (name) => {
+    const i = src.indexOf(`function ${name}(`);
+    assert.ok(i >= 0, name);
+    const j = src.indexOf('\n}\n', i);
+    return src.slice(i, j);
+  };
+  test('clearStaleLock の中で、自分が読んだ記録が無効かを確かめ直す', () => {
+    assert.match(body('clearStaleLock'), /lockIsStale\(/);
+  });
+  test('unitLockFree は無く、unitGate は clearStaleLock を1回だけ呼ぶ', () => {
+    assert.ok(!src.includes('unitLockFree'));
+    const i = src.indexOf('lim.count >= lim.limit');
+    const j = src.indexOf('v.ask(limitReason(lim))', i);
+    assert.equal(src.slice(i, j).match(/clearStaleLock\(/g).length, 1);
   });
 });

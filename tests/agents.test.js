@@ -300,3 +300,26 @@ describe('unit: 欄が読み取れない命令書では起動されない(2026-1
     assert.doesNotMatch(body('unit'), /読み取れないとき。この場合、Hooks が書き込みをすべて止めます/);
   });
 });
+
+describe('0.4.1: 決めた点、重い手順、【時間】', () => {
+  test('unit: 命令の範囲の中の細部は自分で決め、【実施内容】に「決めた点」と書く。変えるもの、戻せないものは決めない', () => {
+    const b = body('unit');
+    assert.match(b, /命令の範囲の中で、命令書が決めていない細部は、企図、制約、完了条件に沿って自分で決め、【実施内容】に「決めた点」として、内容と理由を書きます/);
+    assert.match(b, /命令に無い物は作りません/);
+    assert.match(b, /完了条件や制約を変えるもの、元に戻せないものは、決めずに【未解決・懸念】に書きます/);
+    // 重い手順の1回の時間を【根拠】に書く決まりは、unit が読み込む mission-order の報告の決まりに置く(unit.md には損耗限度の時間と紛れないよう「時間」を書かない)
+    assert.match(fs.readFileSync(path.join(ROOT, 'skills', 'mission-order', 'SKILL.md'), 'utf8'), /unit は、重い手順では、1回にかかった時間を【根拠】に書きます/);
+  });
+  test('plans: 評価の材料に、重い手順の回数と時間。記入例にも数字がある', () => {
+    const b = body('plans');
+    assert.match(b, /評価の材料になる事実\(起動するサブエージェントの回数とモデル、重い手順の回数と時間、指揮官に求める手作業、依存するもの\)/);
+    const ex = b.slice(b.indexOf('## 記入例(報告)'));
+    assert.match(ex, /重い手順/);
+    // 記入例の重い手順は、目安(10回以上か合計30分以上)を超える回数にする
+    const counts = [...ex.matchAll(/重い手順は[^。]*?(\d+)回/g)].map((m) => Number(m[1]));
+    assert.ok(counts.length > 0 && counts.every((n) => n >= 10), JSON.stringify(counts));
+  });
+  test('intel: 【時間】は、期限と、重い手順の回数と時間、使用量の見込みを、数字か測り方で書く', () => {
+    assert.match(body('intel'), /【時間】には、期限\(決心を受けたもの\)と、重い手順の回数と時間、使用量の見込み\(起動の回数とモデル\)を書きます。数字か、測り方を書きます/);
+  });
+});
