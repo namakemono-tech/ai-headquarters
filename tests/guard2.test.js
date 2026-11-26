@@ -95,11 +95,14 @@ describe('点検の指摘 1: 包みは直後の1語だけをコマンド名と�
 
 describe('点検の指摘 2: ヒアドキュメントと複数行の引用符', () => {
   const commit = 'git commit -m "$(cat <<\'EOF\'\nFormat output\n.env note\nrm -r mention\nEOF\n)"';
-  test('標準のコミットの書き方は止めない', () => {
+  // 0.6.0(伺5): コミットそのものは、メインに確認、サブエージェントは拒否。本文の .env や rm -r の文字は、理由に出さない(読み違えない)
+  test('標準のコミットの書き方は、コミットとしてだけ扱う(本文を読み違えない)', () => {
     const root = fix();
-    assert.equal(dec(sh(root, null, commit)), null);
-    assert.equal(dec(sh(root, 'other:a', commit)), null);
-    assert.equal(dec(sh(root, 'unit', commit)), null);
+    const m = sh(root, null, commit);
+    assert.equal(dec(m), 'ask');
+    assert.ok(reason(m).includes('git commit') && !reason(m).includes('破壊的') && !reason(m).includes('保護'), reason(m));
+    assert.equal(dec(sh(root, 'other:a', commit)), 'deny');
+    assert.equal(dec(sh(root, 'unit', commit)), 'deny');
   });
   for (const q of ["'EOF'", '"EOF"', 'EOF']) {
     test(`ヒアドキュメント ${q} の本文は見ない`, () => {
@@ -135,7 +138,9 @@ describe('点検の指摘 2: ヒアドキュメントと複数行の引用符', 
     const root = fix();
     assert.equal(dec(sh(root, null, 'echo "a\nrm -rf x\nb"')), null);
     assert.equal(dec(sh(root, null, 'echo "a; rm -rf x"')), null);
-    assert.equal(dec(sh(root, null, 'git commit -m "fix; git push -f && done"')), null);
+    const c = sh(root, null, 'git commit -m "fix; git push -f && done"');
+    assert.equal(dec(c), 'ask');
+    assert.ok(reason(c).includes('git commit') && !reason(c).includes('強制'), reason(c));
     assert.equal(dec(sh(root, null, "echo 'a | rm -rf x'")), null);
   });
   test('引用符の中でも $( ) とバッククォートは実行されるので見る', () => {
@@ -182,7 +187,7 @@ describe('点検の指摘 3: cd の追跡', () => {
 describe('点検の指摘 4・9: 命令書の範囲の読み方と、unit の関門', () => {
   const ok = () => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('a') },
+    '.ai-headquarters/state/approvals.jsonl': FP.planRow('a', 'S1', 'OP-001'),
   });
   const call = (root, prompt, agent = null, type = 'ai-headquarters:unit') =>
     pre(root, { agent, tool: 'Agent', input: { subagent_type: type, prompt, description: 'd' } });
@@ -314,7 +319,7 @@ describe('点検の指摘 10・11: 照合の計算量と rm の短いオプシ�
   });
   test('範囲の照合でも同様', () => {
     const root = fix({
-      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('a') },
+      '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approvals.jsonl': FP.planRow('a', 'S1', 'OP-001'),
     });
     const prompt = '【変更してよいファイル】\n- ' + '**/'.repeat(12) + 'x.js';
     assert.equal(dec(pre(root, { tool: 'Agent', input: { subagent_type: 'unit', prompt } })), null);

@@ -34,7 +34,7 @@ function fix(entries) {
   w('.claude/agents/x.md', 'x');
   w('.mcp.json', '{}');
   w('.ai-headquarters/operations/OP-001.md', 'x');
-  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('x') });
+  w('.ai-headquarters/state/approvals.jsonl', FP.planRow('x'));
   if (entries) w('.ai-headquarters/state/unit-scope.json', { valid: true, entries, session_id: 'S1', ts: new Date().toISOString() });
   return root;
 }

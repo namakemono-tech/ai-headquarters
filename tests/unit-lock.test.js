@@ -16,7 +16,20 @@ after(() => {
   try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* 後始末の失敗では落とさない */ }
 });
 
-const OP = '# OP-001 作戦記録\n\n## 目標\n### 必成目標\nx\n\n## 計画\n手順1: unit\n\n## 結果\n未完了\n';
+const OP = `# OP-001
+## 企図
+x
+## 目標
+必成: x
+## 方針
+要旨: unit
+## 承認
+目標の決心: 承認
+## いま
+なし
+## 結果
+未完了
+`;
 const MIN = 60 * 1000;
 let seq = 0;
 const st = (root, n) => path.join(root, '.ai-headquarters', 'state', n);
@@ -27,7 +40,7 @@ function fix({ lock, scope } = {}) {
   fs.mkdirSync(path.join(root, '.ai-headquarters', 'state'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, '.ai-headquarters', 'operations', 'OP-001.md'), OP);
-  fs.writeFileSync(st(root, 'approval.json'), JSON.stringify({ session_id: 'S1', operation: 'OP-001', plan: '2026-11-23T00:00:00Z', fingerprint: FP.fingerprintOf(OP) }));
+  fs.writeFileSync(st(root, 'approvals.jsonl'), FP.planRow(OP));
   if (lock) fs.writeFileSync(st(root, 'unit-lock.json'), JSON.stringify(lock));
   if (scope) fs.writeFileSync(st(root, 'unit-scope.json'), JSON.stringify({ valid: true, entries: ['src/**'], session_id: 'S1', ts: new Date().toISOString(), ...scope }));
   return root;
@@ -177,7 +190,7 @@ describe('2つのセッション', () => {
   });
 });
 
-describe('起動の上限の確認の経路の時間差を直した(0.4.1)', () => {
+describe('予約の経路の時間差を直した(0.4.1。0.6.0 で起動の上限の経路は外した)', () => {
   // 時間差そのものは外から再現できないので、guard.js の本文で確かめる(指紋の本文の一致を確かめるテストと同じやり方)
   const src = fs.readFileSync(GUARD, 'utf8');
   const body = (name) => {
@@ -189,10 +202,9 @@ describe('起動の上限の確認の経路の時間差を直した(0.4.1)', () 
   test('clearStaleLock の中で、自分が読んだ記録が無効かを確かめ直す', () => {
     assert.match(body('clearStaleLock'), /lockIsStale\(/);
   });
-  test('unitLockFree は無く、unitGate は clearStaleLock を1回だけ呼ぶ', () => {
+  test('unitLockFree は無く、unitGate は clearStaleLock を直接呼ばない(無効な記録の確かめは予約の中で行う)', () => {
     assert.ok(!src.includes('unitLockFree'));
-    const i = src.indexOf('lim.count >= lim.limit');
-    const j = src.indexOf('v.ask(limitReason(lim))', i);
-    assert.equal(src.slice(i, j).match(/clearStaleLock\(/g).length, 1);
+    assert.equal((body('unitGate').match(/clearStaleLock\(/g) || []).length, 0);
+    assert.match(body('reserveUnit'), /lockIsStale\(/);
   });
 });

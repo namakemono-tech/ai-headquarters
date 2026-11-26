@@ -1,51 +1,53 @@
 'use strict';
-// SessionStart: 規模判定の短い案内を入れる。設定ファイルに役ごとのモデル(models)があれば、その1行を足す(0.4.0)。何があっても exit 0。
+// SessionStart(0.6.0): 進め方のスキルを読み込む1行と、続いている作戦があることの1行を入れる。
+// 設定ファイルに役ごとのモデル(models)があれば、その1行を足す。何があっても exit 0。
 const fs = require('node:fs');
 const path = require('node:path');
 
-// 設定ファイル(.ai-headquarters/config.json)の models から、4体の役の名前と、モデルの名前らしい値だけを拾って1行にする。
-// 設定が無い、壊れている、使える値が1つも無いときは null(案内に足さない)
+const ROOT = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+// 0.5.0 までの形の作戦記録の移し方(guard.js と同じ文)
+const MIGRATE = (op) => `書き直すより、次の形で移すことを勧めます。(1) ${op} の「## 結果」の最初の行を、ここまでの結果と「残りは次の作戦に移す」に書き換えて閉じる。(2) 残りの仕事を、次の番号の作戦記録として新しい雛形(mission-analysis の「作戦記録」の章。見出し9つ)で立て、「## 企図」に「経過: ${op}(0.5.0 の形の記録)」の1行だけを置く。(3) 新しい作戦の目標と方針を、ふつうの作戦と同じく、目標の決心と計画の決心で指揮官に示し、それぞれ「承認」とだけ入力してもらう。`;
+
+// 設定ファイル(.ai-headquarters/config.json)の models から、4体の役の名前と、モデルの名前らしい値だけを拾って1行にする
 function modelsLine() {
   try {
-    const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const cfg = JSON.parse(fs.readFileSync(path.join(root, '.ai-headquarters', 'config.json'), 'utf8'));
+    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, '.ai-headquarters', 'config.json'), 'utf8'));
     const m = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg.models : null;
     if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
     const pairs = ['intel', 'plans', 'unit', 'inspector']
       .filter((r) => typeof m[r] === 'string' && /^[A-Za-z0-9._\[\]-]{1,60}$/.test(m[r]))
       .map((r) => `${r}=${m[r]}`);
     if (!pairs.length) return null;
-    return `設定ファイルの役ごとのモデル: ${pairs.join('、')}。この役は、規模や任務の種類にかかわらず、起動のたびに Agent の呼び出しの model にこの名前を指定してください(指揮官がその作戦で指定したものが先です)。`;
+    return `設定ファイルの役ごとのモデル: ${pairs.join('、')}。この役を起動するときは、Agent の呼び出しの model にこの名前を指定してください(指揮官がその場で別のモデルを指示したときを除く)。`;
   } catch { return null; }
 }
 
-// 続いている作戦の案内(0.5.0。12.14)。最新の作戦記録に「### 時程」があり、結果が「未完了」で、このセッションが承認を持っていないときだけ。
-// 引き継ぎ待ち(あとに accept も cancel も無い offer)が残っていれば、入れ直しが要らないことを、無ければ申し出と「承認」1回を案内する
+// 続いている作戦(最新の作戦記録の「## 結果」が「未完了」で、計画の決心の記録があり、このセッションはまだその作戦に関わっていない)
 function continuingLine(sessionId) {
   try {
-    const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const dir = path.join(root, '.ai-headquarters', 'operations');
+    const dir = path.join(ROOT, '.ai-headquarters', 'operations');
     const ms = fs.readdirSync(dir).map((n) => /^OP-(\d+)\.md$/i.exec(n)).filter(Boolean);
     if (!ms.length) return null;
     const m = ms.reduce((a, b) => (parseInt(b[1], 10) > parseInt(a[1], 10) ? b : a));
     const op = `OP-${String(parseInt(m[1], 10)).padStart(3, '0')}`;
-    const lines = fs.readFileSync(path.join(dir, m[0]), 'utf8').split(/\r?\n/).map((l) => l.trim());
-    if (!lines.includes('### 時程')) return null;
+    const text = fs.readFileSync(path.join(dir, m[0]), 'utf8');
+    const lines = text.split(/\r?\n/).map((l) => l.trim());
     const i = lines.indexOf('## 結果');
     const res = i < 0 ? '' : (lines.slice(i + 1).find((l) => l !== '') || '');
     if (i >= 0 && res !== '' && !res.startsWith('未完了') && !res.startsWith('#')) return null;
+    // 0.5.0 までの形(guard.js と同じ見分け方)。承認の記録が無くても知らせる(0.6.0 を入れたあと、最初に通る道のため)
+    if (!/^目標の決心\s*[:：]/m.test(text) && (/^###\s*(時程|目標の決心|計画の決心)\s*$/m.test(text) || /^##\s*計画\s*$/m.test(text))) {
+      return `${op} は 0.5.0 までの形の作戦記録で、続いています。0.6.0 では、この形の承認を受け継ぎません。${MIGRATE(op)}`;
+    }
     let rows = [];
-    try { rows = fs.readFileSync(path.join(root, '.ai-headquarters', 'state', 'approvals.jsonl'), 'utf8').split(/\r?\n/).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && r.operation === op); } catch { /* 無い */ }
-    const holder = [...rows].reverse().find((r) => ['plan', 'milestone', 'accept'].includes(r.kind));
-    // 計画の決心の前は、受け継ぐ承認が無いので出さない。承認を持つセッションと、この作戦ですでに動いたセッション(--continue で続けた会話。
-    // 続けるたびに開始の案内が起きる)にも出さない(実地で、作戦記録を作ったセッションが「受け継ぎの申し出」を書いた)
-    if (!holder || (sessionId && holder.session_id === sessionId)) return null;
-    let mine = false;
-    try { mine = fs.readFileSync(path.join(root, '.ai-headquarters', 'state', 'clock.jsonl'), 'utf8').split(/\r?\n/).some((l) => { try { const r = JSON.parse(l); return r.operation === op && r.session_id === sessionId; } catch { return false; } }); } catch { /* 無い */ }
-    if (mine) return null;
+    try { rows = fs.readFileSync(path.join(ROOT, '.ai-headquarters', 'state', 'approvals.jsonl'), 'utf8').split(/\r?\n/).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && r.operation === op); } catch { /* 無い */ }
+    if (!rows.some((r) => ['plan', 'milestone', 'accept'].includes(r.kind))) return null;
+    // --continue で続けた会話も開始の案内が起きるので、この作戦の記録にすでに出てくるセッションには出さない
+    if (sessionId && rows.some((r) => r.session_id === sessionId)) return null;
     const last = [...rows].reverse().find((r) => ['offer', 'accept', 'cancel'].includes(r.kind));
-    if (last && last.kind === 'offer') return `${op} は引き継ぎ待ちです。作戦記録を読み、計画と任務の要点を指揮官に示してから続けてください。『承認』の入れ直しは要りません。`;
-    return `${op} は続いています。このセッションは承認を持っていません。作戦記録を読み、計画と任務の要点を指揮官に示し、『受け継ぎの申し出』を書いてから、『承認』を1回受けてください。`;
+    if (last && last.kind === 'offer') return `${op} は引き継ぎ待ちです。作戦記録の「## いま」までを読み、方針と任務の要点を指揮官に示してから続けてください。「承認」の入れ直しは要りません。`;
+    return `${op} は続いています。このセッションは承認を持っていません。作戦記録の「## いま」までを読み、方針と任務の要点を指揮官に示し、「## いま」に「受け継ぎの申し出: 」の行を書いてから、「承認」を1回受けてください。`;
   } catch { return null; }
 }
 
@@ -58,21 +60,11 @@ try {
     try { isPlugin = fs.existsSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json')); } catch { /* ZIP 版とみなす */ }
   }
   const skill = isPlugin ? 'ai-headquarters:mission-analysis' : 'mission-analysis';
-  const order = isPlugin ? 'ai-headquarters:mission-order' : 'mission-order';
-  const lines = [
-    '【AI司令部】依頼を受けたら、作業の前に、変更するファイルを数えて規模(小か、作戦か)を決めてください。',
-    '小=1〜2ファイル・調査不要・すぐ戻せる。3ファイル以上、調査が要る、すぐには戻せない、のどれかなら作戦です(作った本人以外に点検させるため)。迷ったら作戦です。',
-    `作戦では、${skill} スキルで編成と手順を決めてください。小は、組み込みのサブエージェント(Explore など)も含めて使わず、メインセッションだけで進めます。`,
-    '作戦中は、本製品の4体(intel、plans、unit、inspector)だけを使い、組み込みのサブエージェントは使いません。',
-    '作戦では、承認を求める前に、作戦記録(.ai-headquarters/operations/OP-NNN.md)を作ってください。作戦記録が無いと、承認は記録されません。',
-    '作戦では、任務分析のあとに目標の決心を、計画のあとに計画の決心を、指揮官に求めます。unit の起動には、計画の決心(指揮官が「承認」とだけ入力したこと)が必要です。',
-    `作戦の任務分析の初めと、サブエージェントへの命令書を書く前に、${order} スキルを読み込んでください。命令書は、その型の見出しのとおりに書きます。`,
-  ];
+  const lines = [`【AI司令部】指揮官から作業の依頼を受けたら、最初の応答の前に ${skill} スキルを読み込み、その進め方で進めてください。依頼に進め方の程度が「実行だけ」と書かれていれば、読み込まずに、そのまま実行して報告してください(作戦記録は作りません)。`];
   const models = modelsLine();
   if (models) lines.push(models);
   const cont = continuingLine(sessionId);
   if (cont) lines.push(cont);
-  const text = lines.join('\n');
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: lines.join('\n') } }));
 } catch { /* 何もしない */ }
 process.exitCode = 0;

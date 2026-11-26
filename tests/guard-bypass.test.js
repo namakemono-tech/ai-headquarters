@@ -40,6 +40,10 @@ const cases = (root) => [
   ['.claude/settings.json の Write', { tool: 'Write', input: { file_path: path.join(root, '.claude', 'settings.json') } }],
   ['mv .claude x', { tool: 'Bash', input: { command: 'mv .claude x' } }],
   ['protect.add のパスの Write', { tool: 'Write', input: { file_path: path.join(root, 'secret-area', 'a.txt') } }],
+  // 伺5(0.6.0): コミットと外に出す操作も、メインセッションは確認(bypassPermissions では拒否)
+  ['git commit', { tool: 'Bash', input: { command: 'git commit -m x' } }],
+  ['git push', { tool: 'Bash', input: { command: 'git push' } }],
+  ['npm publish', { tool: 'Bash', input: { command: 'npm publish' } }],
 ];
 
 describe('J59: bypassPermissions のメインセッション', () => {

@@ -42,8 +42,9 @@ describe('session-start.js', () => {
     const o = ctx(r);
     assert.equal(o.hookEventName, 'SessionStart');
     assert.equal(typeof o.additionalContext, 'string');
-    assert.ok(o.additionalContext.split('\n').length <= 8);
-    for (const w of ['規模', '作戦', 'Explore', 'intel', 'plans', 'unit', 'inspector']) assert.ok(o.additionalContext.includes(w), w);
+    // 0.6.0: 進め方のスキルを読み込む1行だけ(設定とつづく作戦が無いとき)。進め方の中身はスキルに置く
+    assert.equal(o.additionalContext.split('\n').length, 1);
+    for (const w of ['作業の依頼', '最初の応答の前', 'mission-analysis']) assert.ok(o.additionalContext.includes(w), w);
   });
   test('プラグイン版は ai-headquarters:mission-analysis', () => {
     assert.ok(ctx(run(good, true)).additionalContext.includes('ai-headquarters:mission-analysis'));
@@ -112,9 +113,8 @@ describe('session-start.js: 設定ファイルの役ごとのモデル(0.4.0)', 
       assert.equal(runIn(proj(bad)), base);
     });
   }
-  test('案内に、中規模以上の任務分析の初めに mission-order を読み込むことがある', () => {
-    assert.match(base, /任務分析の初め/);
-    assert.match(base, /mission-order/);
+  test('案内に、0.6.0 で外した mission-order は出てこない', () => {
+    assert.ok(!base.includes('mission-order'), base);
   });
 });
 
@@ -137,14 +137,34 @@ describe('hooks.json の登録', () => {
   });
 });
 
-describe('命令書を書く前に型を読む案内(2026-11-22)', () => {
-  test('プラグイン版: 命令書を書く前に ai-headquarters:mission-order を読み込む', () => {
-    const t = ctx(run(good, true)).additionalContext;
-    assert.ok(t.includes('命令書を書く前に、ai-headquarters:mission-order スキルを読み込んでください'), t);
-    assert.ok(t.split('\n').length <= 8);
+describe('続いている作戦の1行(0.6.0)', () => {
+  const OPT = (result = '未完了') => `# OP-002\n## 目標\nx\n## 方針\ny\n## 承認\n目標の決心: 承認\n## いま\nなし\n## 結果\n${result}\n`;
+  function opProj(rows, result) {
+    const d = fs.mkdtempSync(path.join(TMP, 'cont-'));
+    fs.mkdirSync(path.join(d, '.ai-headquarters', 'operations'), { recursive: true });
+    fs.mkdirSync(path.join(d, '.ai-headquarters', 'state'), { recursive: true });
+    fs.writeFileSync(path.join(d, '.ai-headquarters', 'operations', 'OP-002.md'), OPT(result));
+    fs.writeFileSync(path.join(d, '.ai-headquarters', 'state', 'approvals.jsonl'), rows.map((r) => JSON.stringify({ operation: 'OP-002', ...r })).join('\n') + '\n');
+    return d;
+  }
+  const at = (d, session = 'S9') => {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: d };
+    delete env.CLAUDE_PLUGIN_ROOT;
+    return ctx(spawnSync(process.execPath, [SS], { input: JSON.stringify({ session_id: session, hook_event_name: 'SessionStart' }), encoding: 'utf8', env })).additionalContext;
+  };
+  test('計画の決心のある未完了の作戦は、承認を持っていないことと、受け継ぎの申し出の書き方を伝える', () => {
+    const t = at(opProj([{ session_id: 'S1', kind: 'plan' }]));
+    assert.ok(t.includes('OP-002 は続いています'), t);
+    assert.ok(t.includes('受け継ぎの申し出: '), t);
   });
-  test('ZIP 版: mission-order(接頭辞なし)', () => {
-    const t = ctx(run(good, false)).additionalContext;
-    assert.ok(t.includes('命令書を書く前に、mission-order スキルを読み込んでください'), t);
+  test('引き継ぎ待ちなら、「承認」の入れ直しが要らないことを伝える', () => {
+    const t = at(opProj([{ session_id: 'S1', kind: 'plan' }, { session_id: 'S1', kind: 'offer' }]));
+    assert.ok(t.includes('OP-002 は引き継ぎ待ちです'), t);
+    assert.ok(t.includes('入れ直しは要りません'), t);
+  });
+  test('計画の決心が無い作戦、終わった作戦、すでに関わったセッションには出さない', () => {
+    assert.ok(!at(opProj([{ session_id: 'S1', kind: 'goals' }])).includes('OP-002'));
+    assert.ok(!at(opProj([{ session_id: 'S1', kind: 'plan' }], '完了: x')).includes('OP-002'));
+    assert.ok(!at(opProj([{ session_id: 'S1', kind: 'plan' }]), 'S1').includes('OP-002'));
   });
 });

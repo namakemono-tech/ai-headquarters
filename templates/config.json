@@ -10,5 +10,9 @@
   "models": {
     "unit": "opus",
     "inspector": "opus"
+  },
+  "notice": {
+    "launches": 12,
+    "minutes": 60
   }
 }

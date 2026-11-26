@@ -155,11 +155,26 @@ describe('inspector の許可リスト(テストコマンド)', () => {
   // ls は、0.5.0 の第3段で読み取りだけ許した(inspector の git 許可リストの節で確かめる)
   const ngCmds = [
     'cat package.json', 'npm install', 'npm run build', 'node script.js', 'node --test --import ./x.js', 'npm test --coverage',
-    'npm test -- --coverage', 'pytest -k foo', 'go test -run X', 'npm test && echo hi', 'npm test || true', 'npm test; ls', 'npm test | tee o',
+    'npm test -- --coverage', 'pytest -k foo', 'go test -run X', 'npm test && echo hi', 'npm test || true', 'npm test | tee o',
     'npm test & ls', 'npm test > out.txt', 'npm test >> out.txt', 'pytest < in.txt', 'npm test $(whoami)', 'npm test `whoami`',
     'npm test\nls', 'npm test\r\nls', 'pytest "a;b"', "pytest 'a|b'", 'pytest "a&b"', 'pytest "a>b"', 'FOO=1 npm test', 'npm test \\--import=x',
     "pytest '-'-import=x", 'pytest tests/{a,b}.py', 'pytest $X', 'pytest (ls)',
   ];
+  // 0.6.0(設計書 4.3): && と ; でつないだ一つ一つが許可リストに合えば通す。出力は head、tail、grep、wc へのパイプで渡せる
+  const okJoined = ['npm test; ls', 'npm test && git status', 'git diff --stat; git status -s', 'npm test | tail -20', 'npm test | grep fail | wc -l', 'git log --oneline | head -5'];
+  for (const c of okJoined) {
+    test(`ok(0.6.0): ${JSON.stringify(c)} は通す`, () => {
+      const r = sh(fix(), 'inspector', c);
+      assert.equal(r.status, 0);
+      assert.notEqual(dec(r), 'deny', reason(r));
+    });
+  }
+  const ngJoined = ['npm test | node x.js', 'npm test | tail -f', 'npm test | tail --follow', 'npm test 2>&1 | tail', 'npm test &&', '; ls', 'npm test && rm x', 'git status; git commit -m x'];
+  for (const c of ngJoined) {
+    test(`ng(0.6.0): ${JSON.stringify(c)} は deny`, () => {
+      assert.equal(dec(sh(fix(), 'inspector', c)), 'deny');
+    });
+  }
   for (const c of ngCmds) {
     test(`ng: ${JSON.stringify(c)} は deny`, () => {
       const root = fix();
@@ -195,6 +210,8 @@ describe('inspector の git 許可リスト', () => {
     'git show --name-only abc123', 'git diff', 'git diff --stat', 'git diff --name-only', 'git diff --name-status HEAD~1',
     'git diff --cached', 'git diff --staged --stat', 'git diff main..feature -- src/a.js', 'git show HEAD:src/a.js',
     // 0.5.0 の第3段(指揮官の決心): 読み取りだけの ls と git ls-files
+    // 0.6.0 第2段(指揮官の決心): git -C <フォルダ> の読み取りと、つないだ読み取り
+    'git -C . status', 'git -C ../sample status --short', 'git -C . ls-files', 'git -C . log --oneline -n 5', 'git status && ls',
     'ls', 'ls docs', 'ls -la docs', 'ls -1 src', 'ls -R tests', 'ls src/a.js', 'git ls-files', 'git ls-files docs', 'git ls-files --others --exclude-standard', 'git ls-files --deleted',
   ];
   for (const c of pass) {
@@ -206,12 +223,12 @@ describe('inspector の git 許可リスト', () => {
     });
   }
   const block = [
-    'git -c core.pager=x diff', 'git -c x diff', 'git -C . status', 'git --git-dir=.git status', 'git --work-tree=. diff',
+    'git -c core.pager=x diff', 'git -c x diff', 'git -C . commit -m x', 'git -C . push', 'git -C', 'git -C -c x status', 'git --git-dir=.git status', 'git --work-tree=. diff',
     'git --exec-path=x status', 'git diff --output=x.txt', 'git diff --output x.txt', 'git diff --ext-diff', 'git diff --textconv',
     'git log --ext-diff', 'git branch', 'git commit -m x', 'git checkout main', 'git push', 'git diff -p', 'git status -b',
-    'git log --format="%h|%s"', 'git log --graph', 'git show --ext-diff HEAD', 'git', 'git status && ls', 'git diff -c',
+    'git log --format="%h|%s"', 'git log --graph', 'git show --ext-diff HEAD', 'git', 'git diff -c',
     'git log --pretty=oneline', 'git diff --no-index a b', 'git show -s', 'git status --ignored',
-    'ls --color=always', 'ls -la > x.txt', 'ls; rm x', 'ls -d', 'git ls-files -z', 'git ls-files --with-tree=HEAD', 'git -C . ls-files', 'ls .env', 'git ls-files .env',
+    'ls --color=always', 'ls -la > x.txt', 'ls; rm x', 'ls -d', 'git ls-files -z', 'git ls-files --with-tree=HEAD', 'git -C //server/share status', 'ls .env', 'git ls-files .env',
     // T16 の点検: PowerShell の ls(Get-ChildItem)で、環境変数、レジストリ、ネットワークのパスを読ませない
     'ls env:', 'ls Env:', 'ls env:API_KEY', 'ls HKCU:\\Software', 'ls cert:', 'ls \\\\server\\share', 'ls //server/share',
   ];
@@ -439,10 +456,12 @@ describe('破壊的コマンド', () => {
     });
   }
   const harmless = [
-    'git log --format=%h', 'npm run format', 'rm file.txt', 'rm -f file.txt', 'git push origin main', 'git push', 'git reset --soft HEAD~1', 'git reset HEAD file',
+    'git log --format=%h', 'npm run format', 'rm file.txt', 'rm -f file.txt', 'git reset --soft HEAD~1', 'git reset HEAD file',
     'git status', 'Remove-Item -Force x.txt', 'Remove-Item x.txt', 'echo rm -rf', 'git branch -d x', 'git branch', 'git checkout main', 'git checkout -b x', 'git restore file.txt',
-    'git clean -n', 'git commit -m "format"', 'ls format', 'echo format', 'del x.txt', 'rd x', 'find . -name x', 'git log --format="%h"', 'prettier --write .', 'node format.js',
+    'git clean -n', 'ls format', 'echo format', 'del x.txt', 'rd x', 'find . -name x', 'git log --format="%h"', 'prettier --write .', 'node format.js',
     'git restore --staged .', 'npm run rm', 'sudo apt install foo',
+    // 伺5 の一覧に似ているが、外に出さないもの
+    'gh release list', 'gh release view v1', 'rsync -a src/ dst/', 'rsync -a C:/a/ D:/b/', 'npm pack', 'docker build .', 'vercel whoami', 'terraform plan', 'kubectl get pods', 'git log --grep=push',
   ];
   for (const c of harmless) {
     test(`止めない: ${c}`, () => {
@@ -450,6 +469,22 @@ describe('破壊的コマンド', () => {
       const r = sh(root, null, c);
       assert.equal(dec(r), null, reason(r));
       assert.equal(dec(sh(root, 'other:agent', c)), null);
+    });
+  }
+  // 伺5(0.6.0): コミット、push、公開、デプロイ、遠隔への転送は、サブエージェントは止め、メインセッションには確認を出す
+  const outward = [
+    'git push origin main', 'git push', 'git -C ../x push', 'git commit -m "format"', 'git commit --amend', 'npm publish', 'pnpm publish', 'yarn npm publish', 'cargo publish',
+    'gh release create v1', 'docker push img', 'vercel', 'vercel --prod', 'npx vercel deploy', 'pnpm dlx netlify deploy', 'firebase deploy', 'wrangler deploy',
+    'kubectl apply -f x.yaml', 'terraform apply', 'ssh host ls', 'scp a host:b', 'rsync -a src/ host:dst', 'echo hi && git push',
+  ];
+  for (const c of outward) {
+    test(`伺5: ${JSON.stringify(c)} はメインに確認、サブエージェントは拒否`, () => {
+      const root = fix();
+      const m = sh(root, null, c);
+      assert.equal(dec(m), 'ask', 'main');
+      assert.ok(reason(m).includes('戻せない操作'));
+      assert.equal(dec(sh(root, 'ai-headquarters:unit', c)), 'deny', 'unit');
+      assert.equal(dec(sh(root, 'other:agent', c)), 'deny', 'unknown sub');
     });
   }
   test('PowerShell ツールにも同じ照合', () => {
@@ -474,7 +509,7 @@ describe('承認の関門・予約・範囲', () => {
   const approved = (extra = {}) => fix({
     '.ai-headquarters/operations/OP-001.md': 'a',
     '.ai-headquarters/operations/OP-002.md': 'b',
-    '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-002', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('b') },
+    '.ai-headquarters/state/approvals.jsonl': FP.planRow('b', 'S1', 'OP-002'),
     ...extra,
   });
 
@@ -499,7 +534,7 @@ describe('承認の関門・予約・範囲', () => {
   test('古い作戦番号の承認は deny', () => {
     const root = fix({
       '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/operations/OP-002.md': 'b',
-      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z' },
+      '.ai-headquarters/state/approvals.jsonl': FP.planRow('a', 'S1', 'OP-001'),
     });
     const r = agentCall(root);
     assert.equal(dec(r), 'deny');
@@ -508,12 +543,12 @@ describe('承認の関門・予約・範囲', () => {
   test('作戦番号は数値で比べる(OP-9 と OP-10)', () => {
     const root = fix({
       '.ai-headquarters/operations/OP-9.md': 'a', '.ai-headquarters/operations/OP-10.md': 'b',
-      '.ai-headquarters/state/approval.json': { session_id: 'S1', operation: 'OP-10', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('b') },
+      '.ai-headquarters/state/approvals.jsonl': FP.planRow('b', 'S1', 'OP-010'),
     });
     assert.equal(dec(agentCall(root)), null);
   });
   test('壊れた承認ファイルは deny', () => {
-    const root = fix({ '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approval.json': '{bad' });
+    const root = fix({ '.ai-headquarters/operations/OP-001.md': 'a', '.ai-headquarters/state/approvals.jsonl': '{bad' });
     assert.equal(dec(agentCall(root)), 'deny');
   });
   test('承認済みなら通り、予約と範囲が書かれる', () => {
@@ -527,7 +562,7 @@ describe('承認の関門・予約・範囲', () => {
     const scope = readJson(root, '.ai-headquarters/state/unit-scope.json');
     assert.equal(scope.valid, true);
     assert.deepEqual(scope.entries, ['src/a.js', 'src/lib/**/*.js', 'docs/readme.md']);
-    assert.deepEqual(fs.readdirSync(path.join(root, '.ai-headquarters/state')).sort(), ['approval.json', 'unit-lock.json', 'unit-scope.json']);
+    assert.deepEqual(fs.readdirSync(path.join(root, '.ai-headquarters/state')).sort(), ['approvals.jsonl', 'unit-lock.json', 'unit-scope.json']);
   });
   test('素の名前 unit も同じ関門にかかる', () => {
     const root = fix({ '.ai-headquarters/operations/OP-001.md': 'a' });

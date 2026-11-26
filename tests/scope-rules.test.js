@@ -23,7 +23,7 @@ function makeRoot() {
     fs.writeFileSync(path.join(root, rel), typeof v === 'string' ? v : JSON.stringify(v));
   };
   w('.ai-headquarters/operations/OP-001.md', 'x');
-  w('.ai-headquarters/state/approval.json', { session_id: 'S1', operation: 'OP-001', plan: '2026-11-22T00:00:00Z', fingerprint: FP.fingerprintOf('x') });
+  w('.ai-headquarters/state/approvals.jsonl', FP.planRow('x'));
   return root;
 }
 function run(root, input, extra = {}) {
@@ -153,12 +153,12 @@ describe('崩れた命令書では unit を起動させない(2026-11-22)', () =
     '【完了条件】',
     '必成: 上記3か所の金額表示が円付きになっている。',
   ].join('\n');
-  test('起動の時点で止め、mission-order を読み込んで型の見出しどおりに書き直すよう案内する', () => {
+  test('起動の時点で止め、【変更してよいファイル】の書き方を案内する(0.6.0 で mission-order は外した)', () => {
     const root = makeRoot();
     const r = launch(root, BROKEN);
     assert.equal(r.decision, 'deny');
-    assert.ok(r.reason.includes('mission-order'), r.reason);
-    assert.ok(r.reason.includes('型の見出しどおり'), r.reason);
+    assert.ok(!r.reason.includes('mission-order'), r.reason);
+    assert.ok(r.reason.includes('【変更してよいファイル】'), r.reason);
     assert.ok(r.reason.includes('次の行から'), r.reason);
   });
   test('止めたときに、unit の予約と範囲の記録が残らない', () => {

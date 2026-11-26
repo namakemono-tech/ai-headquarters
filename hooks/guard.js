@@ -2,10 +2,9 @@
 'use strict';
 // AI司令部プラグイン: 統制(Hooks)のうち PreToolUse と SubagentStart を受け持つ単体ファイル。
 // Node.js 22 以上、外部パッケージなし。イベント名(hook_event_name)で振り分ける。
-//   PreToolUse   : 役割ごとの制限、保護パス、破壊的コマンド、作戦記録・設定・状態の保護、承認の関門、unit の予約と範囲
-//   PreToolUse の Agent: 4体の起動の前に、起動の上限の8割で知らせ(systemMessage)、上限で確認を出す(0.4.0)。
-//                        大規模では、前の「承認」のあと unit を3回起動したら、4回目の unit の起動を止める(節目の承認の下限)
-//   SubagentStart: unit の予約を「実行中」に切り替える(予約が無ければ実行中の記録を作る)。4体の起動を、作戦ごとに数える(0.4.0。失敗しない)
+//   PreToolUse   : 核の3つ(承認の関門、幕僚役の書き込みとサブエージェントの起動、破壊的コマンドと保護パス)、作戦記録・設定・状態の保護、
+//                  unit の予約(同時に1体)と範囲。文書の書式で止めるのは、unit の命令書の【変更してよいファイル】だけ(0.6.0)
+//   SubagentStart: unit の予約を「実行中」に切り替える(予約が無ければ実行中の記録を作る)。4体の起動を、作戦ごとに数える(知らせに使う。失敗しない)
 // PreToolUse で内部エラーが起きたときは、理由を標準エラーに出して exit 2(止める側に倒す)。
 
 const fs = require('fs');
@@ -480,10 +479,44 @@ function destructiveLabel(name, args) {
   return null;
 }
 
+// ---- 外に出す操作とコミット(0.6.0。伺5)。サブエージェントは止め、メインセッションには確認を出す(bypassPermissions では拒否)。
+// 禁止リスト方式なので、リストに無い道具と、スクリプトの中からの実行は止まらない(README の限界)
+const RUNNERS = new Set(['npx', 'pnpx', 'bunx']);
+const RUNNER_SUBS = { pnpm: ['dlx', 'exec'], npm: ['exec'], yarn: ['dlx', 'exec'] };
+function outwardLabel(name, args) {
+  // npx vercel deploy、pnpm dlx netlify deploy のような、取ってきて流す形は、流す道具の名前で見る
+  let n = name; let a = args;
+  for (let k = 0; k < 3; k++) {
+    const viaRunner = RUNNERS.has(n) || (RUNNER_SUBS[n] && RUNNER_SUBS[n].includes(a[0]));
+    if (!viaRunner) break;
+    const rest = RUNNERS.has(n) ? a : a.slice(1);
+    const i = rest.findIndex((w) => !w.startsWith('-'));
+    if (i < 0) return null;
+    n = normName(rest[i]).replace(/@[^/]*$/, ''); a = rest.slice(i + 1);
+  }
+  const sub = a.find((w) => !w.startsWith('-'));
+  if (n === 'git') {
+    const g = gitSub(a).sub;
+    if (g === 'push') return 'git push(外に出す操作)';
+    if (g === 'commit') return 'git commit(コミット)';
+    return null;
+  }
+  if (['npm', 'pnpm', 'yarn', 'cargo', 'bun'].includes(n) && (sub === 'publish' || (n === 'yarn' && sub === 'npm' && a.includes('publish')))) return `${n} publish(公開)`;
+  if (n === 'gh' && sub === 'release' && ['create', 'upload', 'edit', 'delete'].includes(a[a.indexOf('release') + 1])) return 'gh release(公開)';
+  if ((n === 'docker' || n === 'podman') && sub === 'push') return `${n} push(公開)`;
+  if (n === 'vercel' && (sub === undefined || sub === 'deploy' || a.includes('--prod'))) return 'vercel(デプロイ)';
+  if (['netlify', 'firebase', 'wrangler'].includes(n) && (sub === 'deploy' || (n === 'wrangler' && sub === 'publish'))) return `${n} deploy(デプロイ)`;
+  if ((n === 'kubectl' || n === 'terraform' || n === 'tofu') && sub === 'apply') return `${n} apply(デプロイ)`;
+  if (n === 'ssh' || n === 'scp' || n === 'sftp') return `${n}(遠隔への転送)`;
+  // rsync は、遠隔の指定(host:path)があるときだけ。C:/ のようなドライブ文字は除く
+  if (n === 'rsync' && a.some((w) => !w.startsWith('-') && /^[^/\\]*:/.test(w) && !/^[A-Za-z]:[\\/]?/.test(w))) return 'rsync(遠隔への転送)';
+  return null;
+}
+
 // ---------------------------------------------------------------- 作戦記録・設定・状態の削除/移動/上書き
 
 const DELMOVE = new Set(['rm', 'del', 'erase', 'remove-item', 'ri', 'rd', 'rmdir', 'mv', 'move', 'move-item', 'mi', 'rename-item', 'rni', 'ren', 'rename', 'unlink']);
-const AHQ_CANDIDATES = [AHQ, `${AHQ}/operations`, `${AHQ}/operations/op-001.md`, `${AHQ}/config.json`, `${AHQ}/state`, `${AHQ}/state/approval.json`].map((c) => c.split('/'));
+const AHQ_CANDIDATES = [AHQ, `${AHQ}/operations`, `${AHQ}/operations/op-001.md`, `${AHQ}/config.json`, `${AHQ}/state`, `${AHQ}/state/approvals.jsonl`].map((c) => c.split('/'));
 const opsExists = (base) => fs.existsSync(path.join(base.rootNative, AHQ, 'operations'));
 
 function hitsAhqProtected(arg, base, unknown) {
@@ -620,6 +653,8 @@ function handleEff(eff, st, base, ctx, v, seg, depth) {
   }
   const label = destructiveLabel(name, args);
   if (label) v.denyOrAsk(`破壊的なコマンド(${label})です。`);
+  const out = outwardLabel(name, args);
+  if (out) v.denyOrAsk(`戻せない操作(${out})です。成果を外に出すかとコミットするかは、報告を受けた指揮官が決めます。`);
   const cl = claudeLabel(name, args);
   if (cl) v.denyOrAsk(`プラグインや MCP の状態を変えるコマンド(${cl})です。入れたものの Hooks や MCP サーバーは利用者の権限で動き、作戦の途中で統制が変わります。入れるかどうかは指揮官が決めます。`);
   let targets = null;
@@ -742,24 +777,59 @@ const GIT_OPTIONS = {
 const LS_OPTIONS = new Set(['-l', '-a', '-la', '-al', '-1', '-R']);
 const GIT_SAFE_EXTRA = ['--no-ext-diff', '--no-textconv'];
 
+// 0.6.0(設計書 4.3): && と ; でつないだコマンドは、区切った一つ一つが許可リストに合えば通す。許したコマンドの出力は、
+// パイプで head、tail、grep、wc に渡せる。||、&、>、<、$、バッククォート、括弧、波括弧、改行は、引用符の中でも止め続ける
+const PIPE_FILTERS = new Set(['head', 'tail', 'grep', 'wc']);
+const SYMBOL_DENY = 'inspector には、||、&、>、>>、<、$、(、)、{、}、バッククォート、改行を含むコマンドを許していません(引用符の中も同じ。$ ( ) { } は、それぞれ単独でも止めます)。つなげるのは &&、; と、head、tail、grep、wc へのパイプ(|)だけです。';
+
 // 戻り値: { deny: 理由 } / { update: 新しいコマンド } / null(通す)
 function inspectorCheck(cmd, cfg) {
-  if (/&&|\|\||[;|&<>`$(){}\n\r]/.test(cmd)) {
-    return { deny: 'inspector には、コマンドをつないだり入出力を切り替えたりする記号(&&、||、;、|、&、>、<、$、(、)、{、}、バッククォート、改行。$ ( ) { } は、それぞれ単独でも止めます)を含むコマンドを許していません(引用符の中も同じ)。' };
+  if (/\|\|/.test(cmd)) return { deny: SYMBOL_DENY };
+  const parts = cmd.split(/(&&|;|\|)/);
+  let changed = false;
+  for (let i = 0; i < parts.length; i += 2) {
+    if (/[&<>`$(){}\n\r]/.test(parts[i])) return { deny: SYMBOL_DENY };
+    if (!parts[i].trim()) return { deny: parts.length > 1 ? 'inspector のコマンドのつなぎ方を解釈できませんでした(&&、;、| の前後にコマンドが要ります)。' : 'inspector には空のコマンドを許していません。' };
+    const r = parts[i - 1] === '|' ? pipeFilterCheck(parts[i]) : inspectorOne(parts[i], cfg);
+    if (r && r.deny) return r;
+    if (r && r.update !== undefined) { parts[i] = r.update; changed = true; }
   }
+  return changed ? { update: parts.join('') } : null;
+}
+
+function pipeFilterCheck(seg) {
+  const tokens = seg.trim().split(/\s+/).map(stripQuotes);
+  if (!PIPE_FILTERS.has(tokens[0])) return { deny: `inspector のパイプ(|)の先に置けるのは、head、tail、grep、wc だけです(${tokens[0]} は止めます)。` };
+  for (const t of tokens.slice(1)) {
+    if (/^\\+-/.test(t)) return { deny: 'inspector では、エスケープを使ったオプションの指定を許していません。' };
+    if (tokens[0] === 'tail' && (t === '--follow' || t.startsWith('--follow=') || /^-[A-Za-z0-9]*[fF]/.test(t))) return { deny: 'inspector の tail に、終わらない読み取り(-f、-F、--follow)は許していません。' };
+  }
+  return null;
+}
+
+// 1つのコマンドの検査。戻り値: { deny } / { update: 書き換えたコマンド } / null
+function inspectorOne(cmd, cfg) {
   const raw = cmd.trim().split(/\s+/).filter(Boolean);
   if (!raw.length) return { deny: 'inspector には空のコマンドを許していません。' };
   const tokens = raw.map(stripQuotes);
   if (tokens.some((t) => /^\\+-/.test(t))) return { deny: 'inspector では、エスケープを使ったオプションの指定を許していません。' };
 
   if (raw[0] === 'git') {
-    const sub = raw[1];
+    // git -C <フォルダ> は、読み取りのサブコマンドに限って通す(0.6.0 第2段。実1 の流し直しで止まった形)
+    let at = 1;
+    if (raw[1] === '-C') {
+      const dir = tokens[2];
+      if (!dir || dir.startsWith('-')) return { deny: 'inspector の git -C には、フォルダのパスを1つ付けてください。' };
+      if (/^(?:\\\\|\/\/)/.test(dir)) return { deny: `inspector の git -C に、ネットワークのパス(${dir})は渡せません。` };
+      at = 3;
+    }
+    const sub = raw[at];
     if (!sub || !Object.prototype.hasOwnProperty.call(GIT_OPTIONS, sub)) {
-      return { deny: 'inspector に許す git は、git diff / status / log / show / ls-files だけです(git の直後にサブコマンドが必要で、-c や -C などのオプションは置けません)。' };
+      return { deny: 'inspector に許す git は、git diff / status / log / show / ls-files だけです(git の直後か、git -C <フォルダ> の直後にサブコマンドを置きます。-c などのほかのオプションは置けません)。' };
     }
     const allowed = new Set(GIT_OPTIONS[sub]);
     if (sub !== 'status') GIT_SAFE_EXTRA.forEach((o) => allowed.add(o));
-    for (const t of tokens.slice(2)) {
+    for (const t of tokens.slice(at + 1)) {
       if (!t.startsWith('-') || t === '--') continue;
       const name = t.split('=')[0];
       if (allowed.has(name)) continue;
@@ -767,7 +837,7 @@ function inspectorCheck(cmd, cfg) {
       return { deny: `inspector の git ${sub} に許していないオプション(${t})です。` };
     }
     if (sub === 'status' || sub === 'ls-files') return null;
-    const updated = cmd.replace(/^(\s*git\s+(?:diff|log|show))(?=\s|$)/, '$1 --no-ext-diff --no-textconv');
+    const updated = cmd.replace(/^(\s*git\s+(?:-C\s+\S+\s+)?(?:diff|log|show))(?=\s|$)/, '$1 --no-ext-diff --no-textconv');
     if (updated === cmd) return { deny: 'inspector の git コマンドの形を解釈できませんでした。' };
     return { update: updated };
   }
@@ -798,44 +868,33 @@ function inspectorCheck(cmd, cfg) {
 
 // ---------------------------------------------------------------- unit の関門・予約・範囲
 
-// ---- 指紋(ここから。0.4.0。approval.js と guard.js に一字も違わず同じものを書く。直すときは両方を直す)
-// 指紋の対象は、作戦記録の「### 必成目標」「### 点検の物差し」「### 起動の上限」の3つの欄と、「## 計画」の節。
-// 節の見出しは行の全体が「## 計画」(前後の空白は可)。節の本文は、次の「## 」で始まる行の前まで(「### 」の行は含む)。
-// 欄の見出しは行の全体が「### 必成目標」など。欄の本文は、次の「## 」か「### 」で始まる行の前まで。最初に見つけたものを使う。
-// 本文の前後の空行を除き、行末の空白と改行の種類をそろえてから計算する。欄や節が無いときは、空として計算する。
-const FP_FIELDS = ['必成目標', '点検の物差し', '起動の上限'];
+// ---- 指紋(ここから。0.6.0。approval.js と guard.js に一字も違わず同じものを書く。直すときは両方を直す)
+// 指紋は2つ。目標の指紋は「## 目標」の節、方針の指紋は「## 方針」の節から取る。節の見出しは行の全体が「## 目標」(前後の空白は可)。
+// 節の本文は、次の「## 」で始まる行の前まで(「### 」の行は含む)。最初に見つけたものを使う。
+// 本文の前後の空行を除き、行末の空白と改行の種類をそろえてから計算する。節が無いときは、空として計算する。
 function fpLines(text) {
   return String(text == null ? '' : text).replace(/^﻿/, '').split(/\r\n|\r|\n/).map((l) => l.replace(/[ \t　]+$/, ''));
 }
-function fpBody(lines, heading, endRe) {
+function fpBody(lines, heading) {
   const i = lines.findIndex((l) => l.trim() === heading);
   if (i < 0) return null;
   let j = i + 1;
-  while (j < lines.length && !endRe.test(lines[j].trimStart())) j++;
+  while (j < lines.length && !/^##(?!#)/.test(lines[j].trimStart())) j++;
   const body = lines.slice(i + 1, j);
   while (body.length && body[0] === '') body.shift();
   while (body.length && body[body.length - 1] === '') body.pop();
   return body.join('\n');
 }
-const FP_SECTION_END = /^##(?!#)/;
-const FP_FIELD_END = /^###?(?!#)/;
-function fingerprintOf(text) {
+const fpHash = (s) => require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 12);
+function fingerprints(text) {
   const lines = fpLines(text);
-  const parts = FP_FIELDS.map((f) => `### ${f}\n${fpBody(lines, `### ${f}`, FP_FIELD_END) || ''}`);
-  parts.push(`## 計画\n${fpBody(lines, '## 計画', FP_SECTION_END) || ''}`);
-  return require('crypto').createHash('sha256').update(parts.join('\n\u0000\n'), 'utf8').digest('hex').slice(0, 12);
+  return { fp_goals: fpHash(`## 目標\n${fpBody(lines, '## 目標') || ''}`), fp_policy: fpHash(`## 方針\n${fpBody(lines, '## 方針') || ''}`) };
 }
-// 「## 計画」の節があり、空でなく、「未作成」で始まらないか
-function planWritten(text) {
-  const body = fpBody(fpLines(text), '## 計画', FP_SECTION_END);
-  return typeof body === 'string' && body.trim() !== '' && !body.trim().startsWith('未作成');
-}
-// 「### 起動の上限」の欄の最初の行の、先頭の半角の数字(1以上)。読み取れなければ null
-function launchLimitOf(text) {
-  const body = fpBody(fpLines(text), '### 起動の上限', FP_FIELD_END);
-  const m = body ? /^\s*(\d+)/.exec(body.split('\n')[0]) : null;
-  const n = m ? parseInt(m[1], 10) : 0;
-  return n > 0 ? n : null;
+const sameFp = (a, b) => !!a && !!b && a.fp_goals === b.fp_goals && a.fp_policy === b.fp_policy;
+// 「## 方針」が書かれているか(節があり、空でなく、「未作成」で始まらず、雛形の括弧書きの1行だけでもない)
+function policyWritten(text) {
+  const b = (fpBody(fpLines(text), '## 方針') || '').trim();
+  return b !== '' && !b.startsWith('未作成') && !/^[(（][^\n]*[)）]$/.test(b);
 }
 // ---- 指紋(ここまで)
 
@@ -856,10 +915,6 @@ function latestOperation(root) {
   } catch { return null; }
 }
 
-function opNumber(x) {
-  const m = /OP-(\d+)/i.exec(String(x == null ? '' : x));
-  return m ? parseInt(m[1], 10) : null;
-}
 
 // ---------------------------------------------------------------- 作戦中の見分け方(起動の数え上げに使う。0.4.0)
 // 最新の作戦記録の「## 結果」の次の行(空行を除く)が「未完了」で始まるか。欄が無い・読み取れないときは未完了とみなす
@@ -1001,127 +1056,74 @@ function normalizeScopeEntries(entries, base) {
 
 const SCOPE_GUIDE = '【変更してよいファイル】は、見出しの行には何も書かず、次の行から1行に1つ、プロジェクトの最上位からの相対パス(例: src/a.js、src/**)で書いてください。';
 
+// unit の起動の関門(核1)。計画の決心の記録(承認を持つ行)の2つの指紋が、いまの「## 目標」と「## 方針」と同じときだけ通す。
+// 別のセッションの引き継ぎ待ち(offer)が開いていて、指紋が同じなら受け継ぐ(K75)。承認は、セッションに結び付ける
+// 0.5.0 までの形の作戦記録(「### 時程」「### 目標の決心」「### 計画の決心」「## 計画」の見出しがある)。互換の処理は持たず、
+// 新しい雛形への書き直しと「承認」の入れ直しを求める(0.6.0 の T0 の決心)。approval.js と session-start.js も同じ見分け方
+// 新しい雛形の「目標の決心: 」の行があれば、「## 計画」などの見出しを足していても新しい形と見なす(T10 の軽2)
+const oldFormat = (t) => { const s = String(t || ''); return !/^目標の決心\s*[:：]/m.test(s) && (/^###\s*(時程|目標の決心|計画の決心)\s*$/m.test(s) || /^##\s*計画\s*$/m.test(s)); };
+// 移し方は、途中の古い作戦を区切りで閉じ、残りを新しい作戦として立てる(approval.js と session-start.js も同じ文)
+const MIGRATE = (op) => `書き直すより、次の形で移すことを勧めます。(1) ${op} の「## 結果」の最初の行を、ここまでの結果と「残りは次の作戦に移す」に書き換えて閉じる。(2) 残りの仕事を、次の番号の作戦記録として新しい雛形(mission-analysis の「作戦記録」の章。見出し9つ)で立て、「## 企図」に「経過: ${op}(0.5.0 の形の記録)」の1行だけを置く。(3) 新しい作戦の目標と方針を、ふつうの作戦と同じく、目標の決心と計画の決心で指揮官に示し、それぞれ「承認」とだけ入力してもらう。`;
+const CLOSED = (op) => `作戦記録 ${op} は閉じています(「## 結果」の最初の行が「未完了」ではありません)。閉じた作戦の承認では、unit を起動できません。新しい仕事なら、次の番号の作戦記録を新しい雛形で作り、指揮官に目標と方針を示して「承認」を受けてから、unit を起動してください。`;
+const OLD_FORMAT = (op) => `作戦記録 ${op} は 0.5.0 までの形(「### 時程」や「## 計画」がある)です。0.6.0 の Hooks は、この形の承認を受け継がないため、unit を起動できません。${MIGRATE(op)}そのあとで、新しい作戦の unit を起動してください。`;
+
 function unitGate(input, ctx, v) {
   const root = ctx.base.rootNative;
   const latest = latestOperation(root);
-  const v5text = latest === null ? null : readOperation(root, latest);
-  if (hasTimetable(v5text)) {
-    const c = unitGateV5(input, v, root, latest, v5text);
-    if (!c) return;
-    unitTail(input, ctx, v, root, latest, { step: c.step, minutes: c.minutes });
-    const r = v.result();
-    // 止めたときと、起動の上限の確認(ask)を出したときは、引き継ぎの記録を足さない(断られて起動しなかったときに、承認が移らないように。T16 の点検の指摘)
-    if (r && (r.d === 'deny' || r.d === 'ask')) return;
-    const op = `OP-${String(latest).padStart(3, '0')}`;
-    if (c.accept) {
-      apAppend(root, c.accept);
-      v.context(`AI司令部: ${op} の承認を引き継ぎました(指揮官の前の「承認」は数え直しません)。最初の報告で、計画と任務の要点を指揮官に示してください。作戦記録の「### 引き継ぎ」に「引き継ぎ済み: 日時」を書いてください。`);
-    } else if (c.cancel) apAppend(root, { session_id: input.session_id, operation: op, kind: 'cancel' });
-    return;
-  }
   if (latest === null) {
-    v.deny('作戦記録(.ai-headquarters/operations/OP-NNN.md)がまだありません。中規模以上の作戦では、先に作戦記録を作り、指揮官に計画を示して「承認」とだけ入力してもらってから、unit を起動してください。');
+    v.deny('作戦記録(.ai-headquarters/operations/OP-NNN.md)がまだありません。簡易か完全の作戦では、先に作戦記録を作り、指揮官に目標と方針を示して「承認」とだけ入力してもらってから、unit を起動してください。');
     return;
   }
-  const approval = readJsonSafe(path.join(root, AHQ, 'state', 'approval.json'));
-  const ok = approval && typeof approval === 'object' && typeof approval.session_id === 'string' && approval.session_id !== '' && approval.session_id === input.session_id &&
-    opNumber(approval.operation) !== null && opNumber(approval.operation) === latest;
-  // unit の起動に要るのは計画の決心(2026-11-22)。目標の決心だけ、または段階の無い古い記録では止める
-  if (ok && !(typeof approval.plan === 'string' && approval.plan !== '')) {
-    const op = `OP-${String(latest).padStart(3, '0')}`;
-    v.deny(typeof approval.goals === 'string' && approval.goals !== ''
-      ? `作戦記録 ${op} には目標の決心の記録しかありません。目標の決心だけでは unit を起動できません。指揮官に計画を示し、「承認」とだけ入力してもらってから(計画の決心)、unit を起動してください。`
-      : `作戦記録 ${op} に対する計画の決心の記録がありません。指揮官に計画を示し、「承認」とだけ入力してもらってから、unit を起動してください。`);
-    return;
-  }
-  if (!ok) {
-    v.deny(`作戦記録 OP-${String(latest).padStart(3, '0')} に対する指揮官の承認がありません(別のセッションや古い作戦番号の承認は無効です)。指揮官に計画を示し、「承認」とだけ入力してもらってから、unit を起動してください。`);
-    return;
-  }
-  // 承認した目標と計画を、指紋で照らす(0.4.0)。指紋の無い記録(0.3.0 で承認した作戦)も止める
   const op = `OP-${String(latest).padStart(3, '0')}`;
-  if (typeof approval.fingerprint !== 'string' || approval.fingerprint === '') {
-    v.deny(`作戦記録 ${op} の承認の記録に、指紋がありません(0.4.0 より前の版で承認した作戦です)。指揮官に、作戦記録の計画を示し、改めて「承認」とだけ入力してもらってから、unit を起動してください。`);
+  const me = input.session_id;
+  if (typeof me !== 'string' || me === '') { v.deny('セッションを見分けられないため、unit の起動を止めます。'); return; }
+  const text = readOperation(root, latest);
+  if (!resultPending(root, latest)) { v.deny(CLOSED(op)); return; }
+  if (oldFormat(text)) { v.deny(OLD_FORMAT(op)); return; }
+  const rows = apRows(root, op);
+  let holder = lastKind(rows, HOLD_KINDS);
+  const fp = fingerprints(text);
+  const offer = openOffer(rows);
+  let accept = null;
+  if (holder && holder.session_id !== me && offer && offer.session_id !== me && sameFp(offer, fp)) {
+    accept = { session_id: me, operation: op, kind: 'accept', fp_goals: offer.fp_goals, fp_policy: offer.fp_policy };
+    holder = accept;
+  }
+  if (!holder || holder.session_id !== me) {
+    v.deny(rows.some((r) => r.kind === 'goals' && r.session_id === me)
+      ? `作戦記録 ${op} には目標の決心の記録しかありません。目標の決心だけでは unit を起動できません。指揮官に方針を示し、「承認」とだけ入力してもらってから(計画の決心)、unit を起動してください。`
+      : `作戦記録 ${op} に対する、このセッションの計画の決心の記録がありません(別のセッションや古い作戦番号の承認は無効です)。指揮官に目標と方針を示し、「承認」とだけ入力してもらってから、unit を起動してください。別のセッションで続けている作戦なら、作戦記録の「## いま」に「受け継ぎの申し出: 」の行を書いてから、「承認」を1回受けてください。`);
     return;
   }
-  const now = fingerprintOf(readOperation(root, latest));
-  if (now !== approval.fingerprint) {
-    v.deny(`作戦記録 ${op} の目標(必成目標、点検の物差し、起動の上限)か計画が、承認のあとで書き換えられています(承認の指紋 ${approval.fingerprint}、今の指紋 ${now})。書き換えた点を指揮官に示し、改めて「承認」とだけ入力してもらってから、unit を起動してください。計画を組み直したときは、組み直す前の計画を「## 途中修正」に「取り消した計画(指紋 ${approval.fingerprint})」として残してください。`);
+  if (!sameFp(holder, fp)) {
+    v.deny(`作戦記録 ${op} の「## 目標」か「## 方針」が、承認のあとで書き換えられています。書き換えた点を指揮官に示し、改めて「承認」とだけ入力してもらってから、unit を起動してください。`);
     return;
   }
-  // 大規模の節目の承認の下限(0.4.0。2026-11-23 指揮官の決定)。前の「承認」のあと unit を3回起動したら、4回目の前に止める
-  if (operationScale(readOperation(root, latest)) === '大' && resultPending(root, latest)) {
-    const since = Date.parse(approval.plan);
-    const n = countLaunches(root, op, { only: UNIT_RE, sinceMs: Number.isNaN(since) ? 0 : since });
-    if (n >= MILESTONE_UNITS) {
-      v.deny(`作戦 ${op} は大規模で、前の「承認」のあと unit を${n}回起動しました(節目の承認の下限は、unit の起動3回ごとです。同じ任務を命じ直した起動も1回と数えます)。次の unit を起動する前に、指揮官に中間報告をして、「承認」とだけ入力してもらってください。「続けて」「進めて」などの返事は承認になりません。そのことも指揮官に伝えてください。`);
-      return;
-    }
-  }
-  unitTail(input, ctx, v, root, latest, {});
-}
-
-// unit の起動の後半(範囲の読み取り、起動の上限、予約)。0.4.1 の道と 0.5.0 の道で共通。extra は範囲の記録に足す欄(0.5.0 の手順と持ち時間)
-function unitTail(input, ctx, v, root, latest, extra) {
   // 範囲は予約より先に読む。読み取れなければ、予約も範囲の記録も残さずに起動を止める(実行中の unit の記録を壊さないため)
-  const ti = input.tool_input || {};
-  const scope = parseScope(ti.prompt);
+  const scope = parseScope((input.tool_input || {}).prompt);
   if (!scope.valid) {
-    v.deny(`命令書の【変更してよいファイル】を読み取れないため、unit を起動できません。mission-order スキルを読み込み、型の見出しどおりに命令書を書き直してください。${SCOPE_GUIDE}`);
+    v.deny(`命令書の【変更してよいファイル】を読み取れないため、unit を起動できません。${SCOPE_GUIDE}`);
     return;
   }
   const stateDir = path.join(root, AHQ, 'state');
-  const lockDenied = () => {
+  if (!reserveUnit(stateDir, me, input.tool_use_id)) {
     const held = readJsonSafe(path.join(stateDir, 'unit-lock.json'));
-    v.deny(held && typeof held === 'object' && held.session_id !== input.session_id
+    v.deny(held && typeof held === 'object' && held.session_id !== me
       ? `別のセッションの unit が実行中(または起動の予約中)です。unit は、プロジェクトの中で同時に1体までです。${LOCK_REMEDY}`
       : `unit は同時に1体までです。実行中の unit(または予約中の起動)が終わってから起動してください。${LOCK_REMEDY}`);
-  };
-  const writeScope = () => atomicWrite(path.join(stateDir, 'unit-scope.json'),
-    { valid: true, entries: normalizeScopeEntries(scope.entries, ctx.base), session_id: input.session_id, ts: new Date().toISOString(), ...extra });
-  // 起動の上限の確認を出すときは、予約を取らない(点検の軽2)。確認が断られたときに予約が2分残り、次の unit が止まるのを防ぐ。
-  // 予約の代わりに、実行中の unit が無いことだけを確かめる。許されて起動したら、起動の知らせ(SubagentStart)で実行中の記録を作る
-  const lim = launchLimitState(root, latest);
-  if (lim && lim.count >= lim.limit) {
-    // 実行中の unit が無いことを確かめ、無効になった古い記録(異常に終わった unit のもの)は、ここで取り除く(確かめの指摘の新1)。
-    // 残すと、許されて起動した unit の書き込みが「持ち主が、この unit ではありません」で止まるため。
-    // 確かめと取り除きは、clearStaleLock の中で同じ読みについて行う(あいだに作られた有効な予約を取り除かない。0.4.1)
-    if (!clearStaleLock(stateDir)) { lockDenied(); return; }
-    fs.mkdirSync(stateDir, { recursive: true });
-    writeScope();
-    v.ask(limitReason(lim));
     return;
   }
-  if (!reserveUnit(stateDir, input.session_id, input.tool_use_id)) { lockDenied(); return; }
-  writeScope();
-  if (lim) limitNotice(lim, v);
+  atomicWrite(path.join(stateDir, 'unit-scope.json'), { valid: true, entries: normalizeScopeEntries(scope.entries, ctx.base), session_id: me, ts: new Date().toISOString() });
+  if (accept) {
+    apAppend(root, accept);
+    v.context(`AI司令部: ${op} の承認を引き継ぎました(指揮官の前の「承認」は数え直しません)。最初の報告で、方針と任務の要点を指揮官に示してください。作戦記録の「## いま」に「引き継ぎ済み: 日時」を書いてください。`);
+  } else if (offer && offer.session_id === me) apAppend(root, { session_id: me, operation: op, kind: 'cancel' });
 }
 
-// ---------------------------------------------------------------- 起動の数え上げ(0.4.0)
+// ---------------------------------------------------------------- 起動の数え上げ(0.4.0。0.6.0 では止めずに、知らせに使う)
 // 4体の起動の知らせ(SubagentStart)のたびに、最新の作戦記録の「## 結果」が「未完了」なら、state/launches.jsonl に1行足す。
 // 1行に1回の追記にするのは、並列に起動したときに数え漏らさないため。同じ agent_id は1回と数える。
-// 上限は、approval.js が「承認」を記録するときに控えた値(approval.json の launch_limit)。欄を書き換えても次の「承認」までは変わらない
 function launchesPath(root) { return path.join(root, AHQ, 'state', 'launches.jsonl'); }
-// only: 役の名前を絞る正規表現。sinceMs: その時刻より後(同じ時刻を含む)の起動だけを数える
-function countLaunches(root, op, { only = null, sinceMs = null } = {}) {
-  let raw = '';
-  try { raw = fs.readFileSync(launchesPath(root), 'utf8'); } catch { return 0; }
-  const seen = new Set();
-  let n = 0;
-  for (const line of raw.split(/\r?\n/)) {
-    let r = null;
-    try { r = JSON.parse(line); } catch { continue; }
-    if (!r || typeof r !== 'object' || r.operation !== op) continue;
-    if (only && !(typeof r.agent_type === 'string' && only.test(r.agent_type))) continue;
-    if (sinceMs !== null) { const t = Date.parse(r.ts); if (Number.isNaN(t) || t < sinceMs) continue; }
-    if (typeof r.agent_id === 'string' && r.agent_id !== '') {
-      if (seen.has(r.agent_id)) continue;
-      seen.add(r.agent_id);
-    }
-    n++;
-  }
-  return n;
-}
 function recordLaunch(input, root) {
   const latest = latestOperation(root);
   if (latest === null || !resultPending(root, latest)) return;
@@ -1129,54 +1131,45 @@ function recordLaunch(input, root) {
   fs.mkdirSync(path.join(root, AHQ, 'state'), { recursive: true });
   fs.appendFileSync(launchesPath(root), `${JSON.stringify({ operation: op, agent_type: input.agent_type, agent_id: input.agent_id || null, session_id: input.session_id || null, ts: new Date().toISOString() })}\n`);
 }
-// 最新の作戦の起動の回数と、控えた上限。数えないとき(作戦記録が無い、結果を書き終えた、控えた値が無い)は null
-function launchLimitState(root, latest) {
-  if (latest === null || !resultPending(root, latest)) return null;
+// ---- 設定の線の知らせ(0.6.0。伺4)。メインセッションの PreToolUse で、作戦中に設定の線(起動の回数、作業の時間)を超えていたら、
+// 指揮官の画面に作戦ごと・線ごとに1回だけ知らせる(止めない)。知らせたことは state/notices.jsonl に控える。
+// 作業の時間の数え方は clock.js から借りる。借りられなくても、操作は止めない
+function lineNotices(input, ctx) {
+  if (ctx.isSub) return [];
+  let clock;
+  try { clock = require('./clock.js'); } catch { return []; }
+  const root = ctx.base.rootNative;
+  const latest = latestOperation(root);
+  if (latest === null || !resultPending(root, latest)) return [];
   const op = `OP-${String(latest).padStart(3, '0')}`;
-  let limit;
-  if (hasTimetable(readOperation(root, latest))) {
-    const h = lastKind(apRows(root, op), HOLD_KINDS);
-    limit = Number(h && h.copy && h.copy.launch_limit);
-  } else {
-    const approval = readJsonSafe(path.join(root, AHQ, 'state', 'approval.json'));
-    if (!approval || typeof approval !== 'object' || opNumber(approval.operation) !== latest) return null;
-    limit = Number(approval.launch_limit);
+  const lines = clock.noticeLines(root);
+  if (!lines.launches && !lines.minutes) return [];
+  const state = path.join(root, AHQ, 'state');
+  const shown = new Set(clock.readLines(path.join(state, 'notices.jsonl')).filter((r) => r.operation === op).map((r) => r.kind));
+  const out = [];
+  if (lines.launches && !shown.has('launches')) {
+    const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+    const launching = AGENT_TOOLS.has(input.tool_name) && typeof ti.subagent_type === 'string' && ROLE_RE.test(ti.subagent_type);
+    const n = clock.launchCount(root, op) + (launching ? 1 : 0);
+    if (n > lines.launches) out.push({ kind: 'launches', value: n, text: `起動が設定の線(${lines.launches}回)を超えました(${launching ? 'この起動で' : 'いま'}${n}回目)` });
   }
-  if (!Number.isInteger(limit) || limit <= 0) return null;
-  return { op, limit, count: countLaunches(root, op) };
-}
-// 確認の画面で指揮官が読む文(点検の軽8)。bypassPermissions などで拒否になったときは、メインセッションが読む
-function limitReason({ op, limit, count }) {
-  return `AI司令部: 作戦 ${op} の起動の上限 ${limit} 回に達しています(4体の起動 ${count} 回)。許すと、上限を超えて起動します。残りの見込みと、上限を上げる案、作戦を止める案をまだ聞いていなければ、断ってください。(メインセッションへ: 断られたら、それらを指揮官に示して伺ってください。)`;
-}
-function limitNotice({ op, limit, count }, v) {
-  if (count + 1 >= Math.ceil(limit * 0.8)) v.notice(`AI司令部: 作戦 ${op} の起動 ${count + 1}/${limit} 回(上限の8割に達しました)`);
-}
-// intel、plans、inspector の起動の前の上限の確認と知らせ。unit は unitGate の中で、予約の前に行う
-function launchLimitGate(input, ctx, v) {
-  const lim = launchLimitState(ctx.base.rootNative, latestOperation(ctx.base.rootNative));
-  if (!lim) return;
-  if (lim.count >= lim.limit) { v.ask(limitReason(lim)); return; }
-  limitNotice(lim, v);
-}
-
-// ---------------------------------------------------------------- 大規模の見分け方(節目の承認の下限に使う。0.4.0)
-// 作戦記録の「## 規模と編成」の最初の行(空行を除く)の初めの字。前の「規模」「:」「*」と空白は飛ばす。大、中、小のどれでもなければ、
-// 大規模だけが足す節(「## 行動方針の比較と結論」「## 状況の特質」)があれば '大'。それも無ければ null(止めない側)
-const MILESTONE_UNITS = 3;
-function operationScale(text) {
-  if (typeof text !== 'string') return null;
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/);
-  const i = lines.findIndex((l) => /^##\s*規模と編成\s*$/.test(l.trim()));
-  if (i >= 0) {
-    const first = lines.slice(i + 1).find((l) => l.trim() !== '');
-    if (first !== undefined && !/^\s*#/.test(first)) {
-      const m = /^[\s*]*(?:規模\s*[:：]?)?[\s*]*([大中小])/.exec(first);
-      if (m) return m[1];
+  if (lines.minutes && !shown.has('minutes')) {
+    const rows = clock.readLines(path.join(state, 'clock.jsonl')).filter((r) => r.operation === op);
+    if (rows.some((r) => r.ev === 'start')) {
+      const w = Math.round(clock.workMs(rows, Date.now()) / 60000);
+      if (w > lines.minutes) out.push({ kind: 'minutes', value: w, text: `作業の時間が設定の線(${lines.minutes}分)を超えました(いま${w}分)` });
     }
   }
-  return lines.some((l) => /^##\s*(行動方針の比較と結論|状況の特質)\s*$/.test(l.trim())) ? '大' : null;
+  if (!out.length) return [];
+  return [{ op, state, items: out }];
 }
+function writeNotices(n) {
+  try {
+    fs.mkdirSync(n.state, { recursive: true });
+    for (const it of n.items) fs.appendFileSync(path.join(n.state, 'notices.jsonl'), `${JSON.stringify({ operation: n.op, kind: it.kind, value: it.value, ts: new Date().toISOString() })}\n`);
+  } catch { /* 控えられなくても、操作は止めない */ }
+}
+
 // 無効になった記録を、一意な名前へ移して取り除く(reserveUnit と同じやり方。移せるのは1つのプロセスだけ)。
 // 記録が無い、または取り除けたら true。読んだ記録が有効なとき、移した記録が新しいもの(競合)だったときは、取り除かずに false。
 // 無効かの確かめは、ここで読んだ記録について行う(確かめてから読み直すあいだに作られた有効な予約を取り除かないため。0.4.1)
@@ -1250,13 +1243,9 @@ function unitScopeAllows(info, root, regKindOnly = null) {
   return false;
 }
 
-// ---------------------------------------------------------------- 0.5.0 の道(作戦記録に「### 時程」の欄がある作戦)
-// 承認は state/approvals.jsonl(approval.js が goals、plan、milestone を、ここが offer、accept、cancel、claim を足す)。
-// 関門と時計は、作戦記録の本文ではなく、承認を持つ行の控え(copy)を読む。「### 時程」の無い作戦は、0.4.1 の道のまま
+// ---------------------------------------------------------------- 承認の記録(0.6.0。道は1本)
+// 承認は state/approvals.jsonl(approval.js が goals、plan、milestone、offer、claim を、ここが accept、cancel を足す)
 const HOLD_KINDS = ['plan', 'milestone', 'accept'];
-function hasTimetable(text) {
-  return typeof text === 'string' && fpLines(text).some((l) => l.trim() === '### 時程');
-}
 function jsonlRows(p, op) {
   let raw = '';
   try { raw = fs.readFileSync(p, 'utf8'); } catch { return []; }
@@ -1279,130 +1268,6 @@ function openOffer(rows) {
     if (rows[i].kind === 'accept' || rows[i].kind === 'cancel') return null;
   }
   return null;
-}
-// 命令書の【統制】の1行目(手順の番号、点検の単位、持ち時間)。clock.js と同じ読み方
-function readControl(prompt) {
-  const s = String(prompt || '');
-  const m = /^\s*【統制】(.*)$/m.exec(s);
-  if (!m) return null;
-  const first = m[1].trim() || (s.slice(m.index + m[0].length).split(/\r?\n/).find((l) => l.trim()) || '');
-  const step = /手順\s*(\d+(?:\s*の\s*\d+)?)/.exec(first);
-  const unit = /単\s*(\d+)/.exec(first);
-  const min = /持ち時間\s*[:：]\s*(\d+)\s*分/.exec(first);
-  const risk = /危険度\s*[:：]\s*(高|中|低)/.exec(first);
-  return {
-    risk: risk ? risk[1] : null,
-    step: step ? step[1].replace(/\s+/g, '') : null,
-    unit: unit ? `単${unit[1]}` : (/(^|[^\S\r\n]|。)なし/.test(first) ? 'なし' : null),
-    minutes: min ? parseInt(min[1], 10) : null,
-  };
-}
-const CONTROL_GUIDE = 'mission-order スキルを読み込み、【統制】の1行目に、手順の番号(unit)、点検の単位(inspector。「単2」か「なし」)、持ち時間(「持ち時間: 20分。」)を書いてから起動してください。';
-// unit の起動の関門(承認、引き継ぎ、指紋、【統制】、第1段の節目の下限)。通すときは【統制】を返す
-function unitGateV5(input, v, root, latest, text) {
-  const op = `OP-${String(latest).padStart(3, '0')}`;
-  const me = input.session_id;
-  if (typeof me !== 'string' || me === '') { v.deny('セッションを見分けられないため、unit の起動を止めます。'); return null; }
-  const rows = apRows(root, op);
-  let holder = lastKind(rows, HOLD_KINDS);
-  const fpNow = fingerprintOf(text);
-  const offer = openOffer(rows);
-  let accept = null;
-  if (holder && holder.session_id !== me && offer && offer.session_id !== me && offer.fingerprint === fpNow) {
-    accept = { session_id: me, operation: op, kind: 'accept', fingerprint: offer.fingerprint, copy: holder.copy };
-    holder = accept;
-  }
-  if (!holder || holder.session_id !== me) {
-    v.deny(rows.some((r) => r.kind === 'goals' && r.session_id === me)
-      ? `作戦記録 ${op} には目標の決心の記録しかありません。目標の決心だけでは unit を起動できません。指揮官に計画を示し、「承認」とだけ入力してもらってから(計画の決心)、unit を起動してください。`
-      : `作戦記録 ${op} に対する指揮官の承認がありません(別のセッションや古い作戦番号の承認は無効です)。指揮官に計画を示し、「承認」とだけ入力してもらってから、unit を起動してください。別のセッションで続けている作戦なら、作戦記録の「### 引き継ぎ」に「受け継ぎの申し出: 」の行を書いてから、「承認」を1回受けてください。`);
-    return null;
-  }
-  if (holder.fingerprint !== fpNow) {
-    v.deny(`作戦記録 ${op} の目標(必成目標、点検の物差し、起動の上限)か計画が、承認のあとで書き換えられています(承認の指紋 ${holder.fingerprint}、今の指紋 ${fpNow})。書き換えた点を指揮官に示し、改めて「承認」とだけ入力してもらってから、unit を起動してください。計画を組み直したときは、組み直す前の計画を「## 途中修正」に「取り消した計画(指紋 ${holder.fingerprint})」として残してください。`);
-    return null;
-  }
-  const c = readControl((input.tool_input || {}).prompt);
-  if (!c || !c.step || !c.minutes) {
-    v.deny(`unit の命令書の【統制】に、手順の番号か持ち時間がありません。${CONTROL_GUIDE}`);
-    return null;
-  }
-  const known = ((holder.copy && holder.copy.steps) || []).map((s) => String(s.step).split('の')[0]);
-  if (!known.includes(c.step.split('の')[0])) {
-    v.deny(`【統制】の手順${c.step} は、承認した計画の控えにありません(控えの手順: ${known.join('、') || 'なし'})。分け直した手順は「手順3 の1」のように、もとの番号を頭に書いてください。計画に無い手順なら、計画を直して指揮官に示し、「承認」を受けてください。`);
-    return null;
-  }
-  // 第2段: 危険度、節目、節目の下限は、承認の控えから読む(12.10)
-  const copy = holder.copy || {};
-  const base = c.step.split('の')[0];
-  const info = (copy.steps || []).find((st) => String(st.step).split('の')[0] === base) || {};
-  if (c.risk && info.risk && c.risk !== info.risk) {
-    v.deny(`【統制】の危険度(${c.risk})が、承認した計画の手順${base} の危険度(${info.risk})と違います。命令書の危険度を計画と同じにしてください。危険度を変えるなら、計画を直して指揮官に示し、「承認」を受けてください。`);
-    return null;
-  }
-  if (resultPending(root, latest)) {
-    const prev = lastKind(rows, ['plan', 'milestone']);
-    const since = prev ? Date.parse(prev.ts) : NaN;
-    const n = countLaunches(root, op, { only: UNIT_RE, sinceMs: Number.isNaN(since) ? 0 : since });
-    const high = info.risk === '高';
-    const mile = (copy.milestones || []).map(String).includes(base);
-    const STOP = `次の unit を起動する前に、指揮官に中間報告をして${high ? '(この手順は危険度が高なので、戻し方と確かめ方を示して)' : ''}、「承認」とだけ入力してもらってください。「続けて」「進めて」などの返事は承認になりません。そのことも指揮官に伝えてください。`;
-    if ((high || mile) && n > 0) {
-      const doneOnce = !high && jsonlRows(path.join(root, AHQ, 'state', 'clock.jsonl'), op).some((r) => r.ev === 'agent_end' && r.role === 'unit' && String(r.step || '').split('の')[0] === base);
-      if (!doneOnce) {
-        v.deny(`手順${base} は、計画の${high ? '危険度が高の手順' : '節目'}です。前の「承認」のあと unit を${n}回起動しているので、この手順の前に節目の承認が要ります。${STOP}`);
-        return null;
-      }
-    }
-    const unitSteps = (copy.steps || []).filter((st) => !st.role || st.role === 'unit').length;
-    const compared = fpLines(text).some((l) => /^##\s*(行動方針の比較と結論|状況の特質)\s*$/.test(l.trim()));
-    const floor = Number.isInteger(copy.floor) ? copy.floor : MILESTONE_UNITS;
-    if (((copy.milestones || []).length || unitSteps >= 5 || compared) && n >= floor) {
-      v.deny(`作戦 ${op} は、前の「承認」のあと unit を${n}回起動しました(節目の下限は unit ${floor}回です。同じ任務を命じ直した起動も1回と数えます)。${STOP}`);
-      return null;
-    }
-  }
-  return { ...c, accept, cancel: !!(offer && offer.session_id === me) };
-}
-// intel、plans、inspector の【統制】と、点検の単位の数え。止めたら true
-function staffGateV5(input, v, root, role) {
-  const latest = latestOperation(root);
-  if (latest === null || !resultPending(root, latest)) return false;
-  const text = readOperation(root, latest);
-  if (!hasTimetable(text)) return false;
-  const c = readControl((input.tool_input || {}).prompt);
-  if (!c || !c.minutes || (role === 'inspector' && !c.unit)) {
-    v.deny(`${role} の命令書の【統制】に、${role === 'inspector' ? '点検の単位か' : ''}持ち時間がありません。${CONTROL_GUIDE}`);
-    return true;
-  }
-  if (role !== 'inspector' || c.unit === 'なし') return false;
-  const op = `OP-${String(latest).padStart(3, '0')}`;
-  const h = lastKind(apRows(root, op), HOLD_KINDS);
-  const lim = Number(h && h.copy && h.copy.inspect_limit);
-  if (!Number.isInteger(lim) || lim <= 0) return false;
-  const done = jsonlRows(path.join(root, AHQ, 'state', 'clock.jsonl'), op).filter((r) => r.ev === 'agent_end' && r.role === 'inspector' && r.unit === c.unit).length;
-  if (done >= lim) {
-    const t = `AI司令部: ${c.unit} の点検は${done + 1}回目です(上限 ${lim}回)。指揮官の決心を受けていなければ、起動せず、残った指摘を示して伺ってください。`;
-    v.notice(t);
-    v.context(t);
-  }
-  return false;
-}
-// unit の持ち時間の知らせ(止めない。1回だけ)
-function holdNotice(input, root, v) {
-  const sp = path.join(root, AHQ, 'state', 'unit-scope.json');
-  const scope = readJsonSafe(sp);
-  if (!scope || typeof scope !== 'object' || scope.notified || !(Number(scope.minutes) > 0) || scope.session_id !== input.session_id) return;
-  const lock = readJsonSafe(path.join(root, AHQ, 'state', 'unit-lock.json'));
-  const own = lock && typeof lock === 'object' && lock.status === 'running' && (!lock.agent_id || lock.agent_id === input.agent_id);
-  const start = own && Number(lock.started_at) ? Number(lock.started_at) : Date.parse(scope.ts);
-  if (Number.isNaN(start)) return;
-  // 分に切り捨ててから比べると、持ち時間 1分の任務は2分を過ぎるまで知らせない(第3段の実地で、1.8分の unit に出なかった)。ミリ秒で比べる
-  const ms = Date.now() - start;
-  if (ms <= scope.minutes * 60000) return;
-  const elapsed = ms < 600000 ? Math.round(ms / 6000) / 10 : Math.round(ms / 60000);
-  atomicWrite(sp, { ...scope, notified: true });
-  v.context(`持ち時間 ${scope.minutes}分を超えました(いま ${elapsed}分)。区切りのよい所で止め、終わった分、残り、残りの見込みを【引き継ぎ】に書いて報告してください。あと数分で必成が終わる見込みなら、続けてかまいません。`);
 }
 // 作戦記録への「引き継ぎ待ち: 」「受け継ぎの申し出: 」の書き込み(offer、claim)は、書き込みが済んだあとに approval.js(post)が記録する
 
@@ -1485,12 +1350,7 @@ function evalAgent(input, ctx, v) {
     return;
   }
   const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
-  if (typeof ti.subagent_type === 'string' && UNIT_RE.test(ti.subagent_type)) {
-    unitGate(input, ctx, v);
-  } else if (typeof ti.subagent_type === 'string' && ROLE_RE.test(ti.subagent_type)) {
-    if (staffGateV5(input, v, ctx.base.rootNative, ROLE_RE.exec(ti.subagent_type)[2])) return;
-    launchLimitGate(input, ctx, v);
-  }
+  if (typeof ti.subagent_type === 'string' && UNIT_RE.test(ti.subagent_type)) unitGate(input, ctx, v);
 }
 
 function handlePreToolUse(input) {
@@ -1501,14 +1361,18 @@ function handlePreToolUse(input) {
   if (EDIT_TOOLS.has(tool)) evalEdit(input, ctx, v);
   else if (SHELL_TOOLS.has(tool)) evalShell(input, ctx, v);
   else if (AGENT_TOOLS.has(tool)) evalAgent(input, ctx, v);
-  let r = v.result();
-  // 持ち時間の知らせ(0.5.0)。止める操作には出さない(知らせ済みの印を付けずに、次の操作で出す)
-  if (ctx.role === 'unit' && (EDIT_TOOLS.has(tool) || SHELL_TOOLS.has(tool)) && !(r && r.d === 'deny')) {
-    try { holdNotice(input, ctx.base.rootNative, v); } catch { /* 知らせられなくても、操作は妨げない */ }
-    r = v.result();
-  }
+  const r = v.result();
   // 知らせは、止めないときだけ出す(止める起動に回数を知らせても意味が無いため)
   const denied = !!(r && r.d === 'deny');
+  if (!denied) {
+    let ln = [];
+    try { ln = lineNotices(input, ctx); } catch { /* 知らせられなくても、操作は止めない */ }
+    for (const n of ln) {
+      v.notice(`【AI司令部】${n.op}: ${n.items.map((i) => i.text).join('。')}。止めずに続けています。続けるか、切り上げるかは、幕僚長の報告を見て決めてください。`);
+      v.context(`設定の線を超えたことを、指揮官の画面に知らせました(${n.items.map((i) => i.text).join('。')})。最初に示した配分と照らし、切り上げか縮小の案を指揮官に伺ってください。`);
+      writeNotices(n);
+    }
+  }
   const msg = v.notices.length && !denied ? v.notices.join('\n') : null;
   const add = v.contexts.length && !denied ? v.contexts.join('\n') : null;
   if (!r && !msg && !add) return;
@@ -1535,7 +1399,7 @@ function handleSubagentStart(input) {
     const base = makeBase(input);
     const lockPath = path.join(base.rootNative, AHQ, 'state', 'unit-lock.json');
     const now = Date.now();
-    // 起動の上限の確認を許されて起動した unit には予約が無い(点検の軽2)。作戦中で記録が無ければ、ここで実行中の記録を作る。
+    // 予約の無いまま起動した unit(予約が先に無効になったときなど)は、作戦中なら、ここで実行中の記録を作る。
     // 作戦記録が無いプロジェクトでは、.ai-headquarters/ を作らない
     if (!fs.existsSync(lockPath)) {
       const latest = latestOperation(base.rootNative);
@@ -1560,11 +1424,24 @@ function handleSubagentStart(input) {
   } catch { /* 起動を妨げない */ }
 }
 
+// ---------------------------------------------------------------- SubagentStop(0.6.0。report-check.js から移した)
+// unit が終わったら、実行中の記録を消す(unit は同時に1体)。running で、session_id と agent_id が入力と同じ記録だけ消す(別の unit の記録を消さないため)
+function handleSubagentStop(input) {
+  try {
+    if (typeof input.agent_type !== 'string' || !UNIT_RE.test(input.agent_type)) return;
+    if (typeof input.session_id !== 'string' || !input.session_id) return;
+    const lockPath = path.join(makeBase(input).rootNative, AHQ, 'state', 'unit-lock.json');
+    const lock = readJsonSafe(lockPath);
+    if (!lock || typeof lock !== 'object' || lock.status !== 'running' || lock.session_id !== input.session_id) return;
+    if (typeof lock.agent_id === 'string' && lock.agent_id === input.agent_id) fs.unlinkSync(lockPath);
+  } catch { /* 終わりを妨げない */ }
+}
+
 // ---------------------------------------------------------------- 入口
 
 function main() {
-  // hooks.json の SubagentStart は第1引数 subagent-start で呼ばれる。このモードは何があっても exit 0
-  const startMode = process.argv[2] === 'subagent-start';
+  // hooks.json の SubagentStart と SubagentStop は、第1引数 subagent-start、subagent-stop で呼ばれる。このモードは何があっても exit 0
+  const startMode = process.argv[2] === 'subagent-start' || process.argv[2] === 'subagent-stop';
   let input;
   try {
     const raw = fs.readFileSync(0, 'utf8').replace(/^﻿/, '');
@@ -1577,9 +1454,11 @@ function main() {
     process.exitCode = 2;
     return;
   }
+  if (process.argv[2] === 'subagent-stop') { handleSubagentStop(input); return; }
   if (startMode) { handleSubagentStart(input); return; }
   const ev = input.hook_event_name;
   if (ev === 'SubagentStart') { handleSubagentStart(input); return; }
+  if (ev === 'SubagentStop') { handleSubagentStop(input); return; }
   if (ev === 'PreToolUse') {
     try { handlePreToolUse(input); } catch (e) {
       process.stderr.write(`guard.js: 内部エラーのため操作を止めます: ${e && e.stack ? e.stack : e}

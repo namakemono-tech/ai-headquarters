@@ -13,19 +13,6 @@
             "onFailure": "block"
           }
         ]
-      },
-      {
-        "matcher": "SubagentHandback",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/report-check.js"
-            ],
-            "timeout": 10
-          }
-        ]
       }
     ],
     "SubagentStart": [
@@ -39,6 +26,22 @@
               "${CLAUDE_PLUGIN_ROOT}/hooks/guard.js",
               "subagent-start"
             ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^(ai-headquarters:)?unit$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/guard.js",
+              "subagent-stop"
+            ],
+            "timeout": 10
           }
         ]
       }
@@ -73,21 +76,6 @@
             "command": "node",
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/clock.js"
-            ],
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "^(ai-headquarters:)?(intel|plans|unit|inspector)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/report-check.js"
             ],
             "timeout": 10
           }
